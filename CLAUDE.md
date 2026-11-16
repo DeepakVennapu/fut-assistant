@@ -105,8 +105,34 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
     hold those back. Real prices would improve this.
 - The solver uses cheap fodder out of position when the chemistry requirement allows it
   (e.g. a spare GK at RB). EA accepts this; it's a known behaviour, not a bug.
+||||||| 5c09935
+- Merged to `main` (PR #1). 18 tests pass (`npm test`). The Playwright tests run the extension
+  against a **mock** of the Web App.
+- **Not yet tried on EA's real Web App.** The Web App's internals are undocumented, so these are
+  guesses that may need fixing on first real use:
+  - finding the open SBC (`findOpenChallenge`);
+  - item fields (`toCard`): positions, rarity, untradeable, base id;
+  - league, nation and club name lookups (they fall back to ids);
+  - requirement key names; quality values 1/2/3 and rarity group 4 = "Rare" are guesses.
 - When the owner reports a problem, ask for the **Copy SBC requirements** output (under More tools)
   and the exported club file's `meta.sampleKeys`.
+
+## Next step: finish testing on the real Web App
+
+Steps 1–4 of the first real test are done (see "Status"). What's left:
+
+1. An SBC with fewer than 11 players (locked "brick" spots): Solve & pre-fill, then compare with EA.
+2. An SBC with a "Rare" requirement, to confirm PLAYER_RARITY_GROUP 4.
+3. A club with a loan player, to confirm loans are skipped.
+4. Points SBCs: use the SBC Storage tab's cards, and avoid cards in another SBC's saved draft.
+
+This must run on the owner's own Mac, in their own Chrome, signed in by them. Don't do it from a
+cloud session: EA is blocked there, and a data-centre login is a needless account risk. The owner
+logs in; never handle their EA credentials. Never submit. Inspect EA internals read-only.
+
+Fix on a branch. Update the mock in `test/extension.test.js` to the real object shapes found. Run
+`npm run build` if `src/` changed, then `npm test`. Record what's now verified under "Status", and
+open a PR. Don't merge without the owner's OK.
 
 ## Ideas not started
 
