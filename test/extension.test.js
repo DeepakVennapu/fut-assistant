@@ -172,6 +172,30 @@ test('pre-fill refuses a bad code and a missing card', { skip: !chromium && 'pla
   }
 });
 
+// FC 27 "points" SBC, shaped like the real one: a Work Area with a score target and no squad.
+test('a points SBC (no squad) is named clearly instead of "no open SBC"', { skip: !chromium && 'playwright not installed', timeout: 60000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><html><body></body></html>');
+    await page.evaluate(mockWebApp);
+    await page.evaluate(() => {
+      const challenge = { id: 212, name: 'Premier League POTM October', type: 'ONE_CLICK_CHALLENGE', formation: '', squad: null,
+        scoreRequirement: 17000, submittedScore: 0, setId: 9, eligibilityOperation: 'AND',
+        eligibilityRequirements: [{ scope: 0, count: -1, kvPairs: { _collection: { 40: [45], 41: [1] } } }] };
+      const ctl = { childViewControllers: [{ viewModel: { _challenge: challenge } }] };
+      window.getAppMain = () => ({ getRootViewController: () => ({ getPresentedViewController: () => ({
+        getCurrentViewController: () => ({ getCurrentController: () => ctl }) }) }) });
+    });
+    await page.addScriptTag({ content: readFileSync(script, 'utf8') });
+    await page.addScriptTag({ content: readFileSync(prefillScript, 'utf8') });
+    const msg = await page.evaluate(() => { try { window.__futAssistantPrefill.findOpenChallenge(); return 'found'; } catch (e) { return e.message; } });
+    assert.match(msg, /"Premier League POTM October" is a points SBC \(pick cards worth 17,000 points\), not a squad/);
+  } finally {
+    await browser.close();
+  }
+});
+
 // Fake SBC requirements, shaped the way the Web App stores them (enum tables + kvPairs).
 function mockRequirements() {
   window.SBCEligibilityKey = { PLAYER_COUNT: 1, TEAM_RATING_1_TO_100: 2, CHEMISTRY_POINTS: 3, SAME_LEAGUE_COUNT: 4,

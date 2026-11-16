@@ -39,16 +39,25 @@
     } catch { return false; }
   };
 
+  // FC 27 also has "points" SBCs (type ONE_CLICK_CHALLENGE): a Work Area where you pick cards
+  // worth a score (e.g. 0/17,000) instead of building a squad. They have squad: null.
+  const looksLikePointsChallenge = (o) => {
+    try {
+      return Boolean(o && typeof o === 'object' && 'eligibilityRequirements' in o && !o.squad &&
+        (o.type === 'ONE_CLICK_CHALLENGE' || Number(o.scoreRequirement) > 0));
+    } catch { return false; }
+  };
+
   // Walk the Web App's current screen looking for an object shaped like an SBC challenge.
   // Shape-based so it survives EA renaming internals between seasons.
-  function searchTree(start, maxDepth = 6) {
+  function searchTree(start, maxDepth = 6, match = looksLikeChallenge) {
     const seen = new Set();
     const found = new Set();
     const visit = (o, depth) => {
       if (!o || typeof o !== 'object' || seen.has(o) || depth > maxDepth) return;
       if (o === window || o === window.services || (typeof Node !== 'undefined' && o instanceof Node)) return;
       seen.add(o);
-      if (looksLikeChallenge(o)) { found.add(o); return; }
+      if (match(o)) { found.add(o); return; }
       if (Array.isArray(o) && o.length > 50) return;
       for (const k of Object.keys(o)) {
         let v;
@@ -67,7 +76,14 @@
     const direct = [current?._challenge, current?.challenge, current?._viewmodel?.challenge].filter(looksLikeChallenge);
     const found = direct.length ? direct : searchTree(current ?? root);
     const open = [...new Set(found)];
-    if (open.length === 0) throw new Error('No open SBC found. Open the SBC so you can see its squad, then try again.');
+    if (open.length === 0) {
+      const points = searchTree(current ?? root, 6, looksLikePointsChallenge)[0];
+      if (points) {
+        throw new Error(`"${points.name ?? 'This SBC'}" is a points SBC (pick cards worth ${Number(points.scoreRequirement)
+          .toLocaleString()} points), not a squad. FUT Assistant only fills squad SBCs.`);
+      }
+      throw new Error('No open SBC found. Open the SBC so you can see its squad, then try again.');
+    }
     if (open.length > 1) throw new Error('Found more than one SBC on screen. Open just the one you want to fill.');
     return open[0];
   }
