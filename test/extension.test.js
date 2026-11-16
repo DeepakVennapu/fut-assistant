@@ -90,10 +90,21 @@ function mockOpenSbc() {
   window.__saved = 0;
   window.__submitted = 0;
   window.__placed = null;
-  const slots = ['GK', 'RB', 'CB', 'CB', 'LB', 'RM', 'CM', 'CM', 'LM', 'ST', 'ST'].map((typeName) => ({ position: { typeName } }));
+  // Slot positions shaped like FC 27's: { id, typeId, name: 'RCB', typeName: 'CB' }.
+  const slots = [['GK', 'GK'], ['RB', 'RB'], ['RCB', 'CB'], ['LCB', 'CB'], ['LB', 'LB'], ['RM', 'RM'], ['RCM', 'CM'],
+    ['LCM', 'CM'], ['LM', 'LM'], ['RS', 'ST'], ['LS', 'ST']].map(([name, typeName], id) => ({ position: { id, name, typeName } }));
+  window.__eaVerdict = { met: true, chemistry: 21, rating: 82 };
   const challenge = {
-    id: 77, setId: 5, eligibilityRequirements: [],
-    squad: { getFieldPlayers: () => slots, setPlayers(items) { window.__placed = items.map((i) => i && i.id); } },
+    id: 77, setId: 5, type: 'OPEN_CHALLENGE', formation: 'f442', eligibilityRequirements: [],
+    squad: {
+      getFieldPlayers: () => slots,
+      setPlayers(items) { window.__placed = items.map((i) => i && i.id); },
+      getChemistry: () => window.__eaVerdict.chemistry,
+      getRating: () => window.__eaVerdict.rating,
+    },
+    // EA's own local checks (no network), used to confirm the fill.
+    meetsRequirements() { return window.__eaVerdict.met; },
+    isRequirementMet(r) { return window.__eaVerdict.met || this.eligibilityRequirements.indexOf(r) !== 1; },
   };
   window.getAppMain = () => ({
     getRootViewController: () => ({
@@ -234,6 +245,9 @@ test('reads the open SBC requirements and the solver can use them', { skip: !chr
     const { sbc } = data;
     assert.equal(sbc.name, 'Test Hybrid');
     assert.equal(sbc.squadSize, 11);
+    // Chemistry is scored on the open squad's own slots.
+    assert.deepEqual(sbc.formations, [['GK', 'RB', 'CB', 'CB', 'LB', 'RM', 'CM', 'CM', 'LM', 'ST', 'ST']]);
+    assert.equal(sbc.formationName, 'f442');
     assert.equal(data.unsupported, 1);
     assert.equal(data.uncertain, 2);
     assert.deepEqual(data.eaText, ['Team Rating: Min. 80', 'First Owner: Exactly 1']);
@@ -288,6 +302,7 @@ test('one click: reads the SBC, solves with the club, places one squad, never su
     assert.match(text, /⚠ Check yourself: .*Not understood: FIRST_OWNER_PLAYERS_COUNT/);
     assert.match(text, /about \d+\+? more time/);
     assert.match(text, /submit it yourself/);
+    assert.match(text, /✔ EA shows rating 82 · chemistry 21, requirements met\./);
 
     const placed = await page.evaluate(() => window.__placed);
     assert.equal(placed.filter(Boolean).length, 11);
@@ -300,6 +315,49 @@ test('one click: reads the SBC, solves with the club, places one squad, never su
     await page.locator('#fut-assistant-export #oneClick').click();
     await status.filter({ hasText: /Please wait/ }).waitFor({ timeout: 5000 });
     assert.equal(await page.evaluate(() => window.__saved), 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('one click: says so loudly when EA disagrees with the solver', { skip: !chromium && 'playwright not installed', timeout: 90000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await loadAll(page);
+    // As seen on the real Web App before the fix: EA scored the placed squad lower.
+    await page.evaluate(() => { window.__eaVerdict = { met: false, chemistry: 10, rating: 81 }; });
+    await page.evaluate(() => document.querySelectorAll('.sbc-requirements').forEach((n) => n.remove()));
+    await page.evaluate(() => document.body.insertAdjacentHTML('beforeend',
+      '<ul class="sbc-requirements"><li>Players: Exactly 11</li><li>Team Rating: Min. 80</li></ul>'));
+    const status = page.locator('#fut-assistant-export #oneClickStatus');
+    await page.locator('#fut-assistant-export #oneClick').click();
+    await status.filter({ hasText: /Placed|Stopped/ }).waitFor({ timeout: 60000 });
+    assert.match(await status.textContent(),
+      /✖ EA shows rating 81 · chemistry 10, and says NOT met: Team Rating: Min\. 80\. Don't submit; clear the squad\./);
+    assert.equal(await page.evaluate(() => window.__submitted), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('pre-fill puts each card in the slot the solver scored it in', { skip: !chromium && 'playwright not installed', timeout: 60000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><html><body></body></html>');
+    await page.evaluate(mockWebApp);
+    for (const f of [script, prefillScript]) await page.addScriptTag({ content: readFileSync(f, 'utf8') });
+    // Four cards can play CM but there are only three CM slots. The solver chose B, C and D for CM;
+    // A goes in the leftover RB slot.
+    const order = await page.evaluate(() => {
+      const card = (id, pos) => ({ id, preferredPosition: pos, possiblePositions: [pos] });
+      const items = [card('A', 'CM'), card('B', 'CM'), card('C', 'CM'), card('D', 'CM')];
+      const placed = window.__futAssistantPrefill.placeCards(items, ['RB', 'CM', 'CM', 'CM'], [null, 'CM', 'CM', 'CM']);
+      return placed.map((i) => i && i.id);
+    });
+    // Without the solver's slots, plain matching would put A in a CM slot and leave D out of position.
+    assert.deepEqual(order, ['A', 'B', 'C', 'D']);
   } finally {
     await browser.close();
   }

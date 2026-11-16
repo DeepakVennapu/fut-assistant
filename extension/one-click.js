@@ -82,6 +82,19 @@
 
     const ev = res.evaluation;
     const check = ev.results.filter((r) => r.unchecked || r.uncertain).map((r) => r.label);
+
+    // Ask EA's own squad screen whether it agrees, and say so loudly if it doesn't.
+    await sleep(300);
+    const ea = P.eaCheck();
+    let eaLine = '';
+    if (ea) {
+      const what = `EA shows rating ${ea.rating ?? '–'} · chemistry ${ea.chemistry ?? '–'}`;
+      if (ea.met) eaLine = ` ✔ ${what}, requirements met.`;
+      else {
+        const labels = ea.failing.map((i) => read.eaText?.[i] ?? `requirement ${i + 1}`);
+        eaLine = ` ✖ ${what}, and says NOT met: ${labels.join('; ') || 'see the list'}. Don't submit; clear the squad.`;
+      }
+    }
     let more = '';
     try {
       const left = club.filter((p) => !placedEarlier.has(p.id));
@@ -90,7 +103,7 @@
     } catch { /* the count is a bonus; skip it on error */ }
 
     return `Placed ${res.squad.length} cards · rating ${ev.rating} · chemistry ${ev.chemistry?.total ?? '–'} · ` +
-      `card value ${coins(res.cost)}.` +
+      `card value ${coins(res.cost)}.${eaLine}` +
       (check.length ? ` ⚠ Check yourself: ${check.join('; ')}.` : '') +
       `${more} Check the squad, then submit it yourself.`;
   }

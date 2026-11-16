@@ -102,3 +102,22 @@ test('requirements: EA ids work as filters', () => {
   const ev = evaluate(squad, { squadSize: 3, requirements: [{ kind: 'count', filter: { leagueId: [13] }, min: 2 }] });
   assert.equal(ev.ok, true);
 });
+
+// Real data from EA's Web App (FC 27, "Red Bull Wiiings Challenge", 4-3-3 slots). EA showed
+// these per-player chemistry values for this exact placement. Out-of-position cards are
+// given a position the formation doesn't have, so the assignment matches EA's placement.
+test('chemistry: matches EA on a real squad placed in the SBC\'s own slots', () => {
+  const F433 = ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'RW', 'ST', 'LW'];
+  const real = [
+    // [name, in position?, clubId, nationId, leagueId, EA chemistry]
+    ['Jaouen', true, 13, 18, 13, 2], ['Chavas', false, 116035, 18, 2218, 0], ['Raum', false, 112172, 21, 19, 0],
+    ['Goretzka', false, 2, 21, 13, 0], ['Morroni', true, 116312, 18, 2221, 1], ['Onana', true, 2, 7, 13, 3],
+    ['Kamara', true, 2, 18, 13, 3], ['Brandt', true, 245, 21, 10, 0], ['Mateta', false, 1799, 18, 13, 0],
+    ['Kean', true, 1745, 27, 31, 0], ['Godts', true, 73, 7, 16, 1],
+  ];
+  const squad = real.map(([name, inPos, club, nation, league], i) =>
+    normalizePlayer({ id: `r${i}`, name, rating: 80, positions: [inPos ? F433[i] : 'CDM'], club, nation, league }));
+  const c = chemistryFor(squad, F433);
+  assert.deepEqual(c.perPlayer.map((p) => p.chem), real.map((r) => r[5]));
+  assert.equal(c.total, 10);
+});

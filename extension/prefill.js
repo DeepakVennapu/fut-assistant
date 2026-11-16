@@ -107,18 +107,29 @@
   }
 
   // Put as many cards as possible into one of their own positions; the rest fill the gaps.
-  function placeCards(items, slots) {
+  // `wantedSlots[i]` is the position the solver scored card i in (e.g. 'CM'). Those go first,
+  // so the squad EA sees is the one whose chemistry the solver computed: when more cards can
+  // play a position than there are slots, a different choice changes the chemistry.
+  function placeCards(items, slots, wantedSlots = []) {
     const owner = new Array(slots.length).fill(-1);
+    items.forEach((_, i) => {
+      const want = wantedSlots[i];
+      if (!want) return;
+      const s = slots.findIndex((name, k) => name === want && owner[k] === -1);
+      if (s !== -1) owner[s] = i;
+    });
+    const preset = new Set(owner.filter((i) => i !== -1));
     const pos = items.map(itemPositions);
     const tryAssign = (i, seen) => {
       for (let s = 0; s < slots.length; s++) {
-        if (seen[s] || !pos[i].has(slots[s])) continue;
+        // Slots the solver chose are fixed; the matching never moves those cards.
+        if (seen[s] || !pos[i].has(slots[s]) || preset.has(owner[s])) continue;
         seen[s] = true;
         if (owner[s] === -1 || tryAssign(owner[s], seen)) { owner[s] = i; return true; }
       }
       return false;
     };
-    items.forEach((_, i) => tryAssign(i, new Array(slots.length).fill(false)));
+    items.forEach((_, i) => { if (!preset.has(i)) tryAssign(i, new Array(slots.length).fill(false)); });
     const placed = new Set(owner.filter((i) => i !== -1));
     const rest = items.map((_, i) => i).filter((i) => !placed.has(i));
     for (let s = 0; s < slots.length && rest.length; s++) if (owner[s] === -1 && slots[s] !== BRICK) owner[s] = rest.shift();
@@ -163,7 +174,8 @@
     if (slots.length && wanted.length > openSpots) {
       throw new Error(`The code has ${wanted.length} cards but this SBC has ${openSpots} spots. Is the right SBC open?`);
     }
-    const placement = placeCards(wanted.map((id) => itemCache.get(id)), slots.length ? slots : wanted.map(() => null));
+    const wantedSlots = code.cards.filter((c) => !c.buy && c.id != null).map((c) => c.slot ?? null);
+    const placement = placeCards(wanted.map((id) => itemCache.get(id)), slots.length ? slots : wanted.map(() => null), wantedSlots);
 
     onStatus('Placing cards…');
     challenge.squad.setPlayers(placement, true);
@@ -177,5 +189,22 @@
       'If the screen did not update, go back and reopen the SBC.';
   }
 
-  window.__futAssistantPrefill = { run, parseCode, placeCards, findOpenChallenge, cooldownLeft, COOLDOWN_MS };
+  // EA's own verdict on the squad as placed, using the Web App's read-only checks
+  // (meetsRequirements / isRequirementMet / getChemistry / getRating are local calculations).
+  // Returns null if this Web App version doesn't expose them.
+  function eaCheck(challenge = findOpenChallenge()) {
+    const { tryCall } = H();
+    const met = tryCall(() => challenge.meetsRequirements());
+    if (typeof met !== 'boolean') return null;
+    const reqs = challenge.eligibilityRequirements ?? [];
+    const failing = reqs.map((r, i) => (tryCall(() => challenge.isRequirementMet(r)) === false ? i : -1)).filter((i) => i >= 0);
+    return {
+      met,
+      failing,
+      rating: tryCall(() => challenge.squad.getRating()) ?? null,
+      chemistry: tryCall(() => challenge.squad.getChemistry()) ?? null,
+    };
+  }
+
+  window.__futAssistantPrefill = { run, parseCode, placeCards, findOpenChallenge, eaCheck, cooldownLeft, COOLDOWN_MS };
 })();

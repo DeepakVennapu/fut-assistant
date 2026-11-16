@@ -132,11 +132,18 @@
       }
     }
 
-    if (!sbc.squadSize) {
-      // Smaller SBCs lock some spots ("bricks"); count the open ones.
-      const slots = tryCall(() => challenge.squad.getFieldPlayers?.()) ?? [];
-      const open = slots.filter((s) => !tryCall(() => s?.isBrick?.()));
-      if (open.length && open.length < 11) sbc.squadSize = open.length;
+    // Smaller SBCs lock some spots ("bricks"); count the open ones.
+    const slots = tryCall(() => challenge.squad.getFieldPlayers?.()) ?? [];
+    const open = slots.filter((s) => !tryCall(() => s?.isBrick?.()));
+    if (!sbc.squadSize && open.length && open.length < 11) sbc.squadSize = open.length;
+    // Chemistry must be scored on the squad's real slots (e.g. f433: GK, RB, CB, CB, LB, CM…),
+    // because pre-fill places cards into the squad as it stands. Solving against other
+    // formations gave 17 chemistry on paper and 10 in EA's squad.
+    const position = window.__futAssistantExport?.position;
+    const openPositions = position ? open.map((s) => position(s?.position?.typeName ?? tryCall(() => s.getPosition().typeName))) : [];
+    if (openPositions.length && openPositions.every(Boolean)) {
+      sbc.formations = [openPositions];
+      sbc.formationName = challenge.formation ?? null;
     }
     for (const u of unsupported) sbc.requirements.push({ kind: 'unsupported', source: u, label: `Not understood: ${u.key} ${u.scope} ${u.values.join('/')}${u.count >= 0 ? ` ×${u.count}` : ''}` });
 
