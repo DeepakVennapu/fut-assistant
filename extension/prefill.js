@@ -39,16 +39,25 @@
     } catch { return false; }
   };
 
+  // FC 27 also has "points" SBCs (type ONE_CLICK_CHALLENGE): a Work Area where you pick cards
+  // worth a score (e.g. 0/17,000) instead of building a squad. They have squad: null.
+  const looksLikePointsChallenge = (o) => {
+    try {
+      return Boolean(o && typeof o === 'object' && 'eligibilityRequirements' in o && !o.squad &&
+        (o.type === 'ONE_CLICK_CHALLENGE' || Number(o.scoreRequirement) > 0));
+    } catch { return false; }
+  };
+
   // Walk the Web App's current screen looking for an object shaped like an SBC challenge.
   // Shape-based so it survives EA renaming internals between seasons.
-  function searchTree(start, maxDepth = 6) {
+  function searchTree(start, maxDepth = 6, match = looksLikeChallenge) {
     const seen = new Set();
     const found = new Set();
     const visit = (o, depth) => {
       if (!o || typeof o !== 'object' || seen.has(o) || depth > maxDepth) return;
       if (o === window || o === window.services || (typeof Node !== 'undefined' && o instanceof Node)) return;
       seen.add(o);
-      if (looksLikeChallenge(o)) { found.add(o); return; }
+      if (match(o)) { found.add(o); return; }
       if (Array.isArray(o) && o.length > 50) return;
       for (const k of Object.keys(o)) {
         let v;
@@ -67,7 +76,14 @@
     const direct = [current?._challenge, current?.challenge, current?._viewmodel?.challenge].filter(looksLikeChallenge);
     const found = direct.length ? direct : searchTree(current ?? root);
     const open = [...new Set(found)];
-    if (open.length === 0) throw new Error('No open SBC found. Open the SBC so you can see its squad, then try again.');
+    if (open.length === 0) {
+      const points = searchTree(current ?? root, 6, looksLikePointsChallenge)[0];
+      if (points) {
+        throw new Error(`"${points.name ?? 'This SBC'}" is a points SBC (pick cards worth ${Number(points.scoreRequirement)
+          .toLocaleString()} points), not a squad. Use Solve & pre-fill to select cards for it.`);
+      }
+      throw new Error('No open SBC found. Open the SBC so you can see its squad, then try again.');
+    }
     if (open.length > 1) throw new Error('Found more than one SBC on screen. Open just the one you want to fill.');
     return open[0];
   }
@@ -91,18 +107,29 @@
   }
 
   // Put as many cards as possible into one of their own positions; the rest fill the gaps.
-  function placeCards(items, slots) {
+  // `wantedSlots[i]` is the position the solver scored card i in (e.g. 'CM'). Those go first,
+  // so the squad EA sees is the one whose chemistry the solver computed: when more cards can
+  // play a position than there are slots, a different choice changes the chemistry.
+  function placeCards(items, slots, wantedSlots = []) {
     const owner = new Array(slots.length).fill(-1);
+    items.forEach((_, i) => {
+      const want = wantedSlots[i];
+      if (!want) return;
+      const s = slots.findIndex((name, k) => name === want && owner[k] === -1);
+      if (s !== -1) owner[s] = i;
+    });
+    const preset = new Set(owner.filter((i) => i !== -1));
     const pos = items.map(itemPositions);
     const tryAssign = (i, seen) => {
       for (let s = 0; s < slots.length; s++) {
-        if (seen[s] || !pos[i].has(slots[s])) continue;
+        // Slots the solver chose are fixed; the matching never moves those cards.
+        if (seen[s] || !pos[i].has(slots[s]) || preset.has(owner[s])) continue;
         seen[s] = true;
         if (owner[s] === -1 || tryAssign(owner[s], seen)) { owner[s] = i; return true; }
       }
       return false;
     };
-    items.forEach((_, i) => tryAssign(i, new Array(slots.length).fill(false)));
+    items.forEach((_, i) => { if (!preset.has(i)) tryAssign(i, new Array(slots.length).fill(false)); });
     const placed = new Set(owner.filter((i) => i !== -1));
     const rest = items.map((_, i) => i).filter((i) => !placed.has(i));
     for (let s = 0; s < slots.length && rest.length; s++) if (owner[s] === -1 && slots[s] !== BRICK) owner[s] = rest.shift();
@@ -147,7 +174,8 @@
     if (slots.length && wanted.length > openSpots) {
       throw new Error(`The code has ${wanted.length} cards but this SBC has ${openSpots} spots. Is the right SBC open?`);
     }
-    const placement = placeCards(wanted.map((id) => itemCache.get(id)), slots.length ? slots : wanted.map(() => null));
+    const wantedSlots = code.cards.filter((c) => !c.buy && c.id != null).map((c) => c.slot ?? null);
+    const placement = placeCards(wanted.map((id) => itemCache.get(id)), slots.length ? slots : wanted.map(() => null), wantedSlots);
 
     onStatus('Placing cards…');
     challenge.squad.setPlayers(placement, true);
@@ -161,5 +189,27 @@
       'If the screen did not update, go back and reopen the SBC.';
   }
 
-  window.__futAssistantPrefill = { run, parseCode, placeCards, findOpenChallenge, cooldownLeft, COOLDOWN_MS };
+  // EA's own verdict on the squad as placed, using the Web App's read-only checks
+  // (meetsRequirements / isRequirementMet / getChemistry / getRating are local calculations).
+  // Returns null if this Web App version doesn't expose them.
+  function eaCheck(challenge = findOpenChallenge()) {
+    const { tryCall } = H();
+    const met = tryCall(() => challenge.meetsRequirements());
+    if (typeof met !== 'boolean') return null;
+    const reqs = challenge.eligibilityRequirements ?? [];
+    const failing = reqs.map((r, i) => (tryCall(() => challenge.isRequirementMet(r)) === false ? i : -1)).filter((i) => i >= 0);
+    return {
+      met,
+      failing,
+      rating: tryCall(() => challenge.squad.getRating()) ?? null,
+      chemistry: tryCall(() => challenge.squad.getChemistry()) ?? null,
+    };
+  }
+
+  // The 30 s wait is shared with points-SBC selections (work-area.js).
+  const markFilled = () => { lastFill = Date.now(); };
+
+  window.__futAssistantPrefill = {
+    run, parseCode, placeCards, findOpenChallenge, searchTree, eaCheck, cooldownLeft, markFilled, COOLDOWN_MS,
+  };
 })();

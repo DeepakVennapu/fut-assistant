@@ -6,6 +6,7 @@ import { evaluate } from '../src/requirements.js';
 import { normalizePlayer } from '../src/model.js';
 import { solve } from '../src/solver.js';
 import { analyzeRepeat } from '../src/analyze.js';
+import { selectForScore } from '../src/points.js';
 
 let nextId = 1;
 const card = (o) => normalizePlayer({
@@ -101,4 +102,61 @@ test('requirements: EA ids work as filters', () => {
   const squad = [card({ leagueId: 13 }), card({ leagueId: 13 }), card({ leagueId: 53 })];
   const ev = evaluate(squad, { squadSize: 3, requirements: [{ kind: 'count', filter: { leagueId: [13] }, min: 2 }] });
   assert.equal(ev.ok, true);
+});
+
+// Real data from EA's Web App (FC 27, "Red Bull Wiiings Challenge", 4-3-3 slots). EA showed
+// these per-player chemistry values for this exact placement. Out-of-position cards are
+// given a position the formation doesn't have, so the assignment matches EA's placement.
+test('chemistry: matches EA on a real squad placed in the SBC\'s own slots', () => {
+  const F433 = ['GK', 'RB', 'CB', 'CB', 'LB', 'CM', 'CM', 'CM', 'RW', 'ST', 'LW'];
+  const real = [
+    // [name, in position?, clubId, nationId, leagueId, EA chemistry]
+    ['Jaouen', true, 13, 18, 13, 2], ['Chavas', false, 116035, 18, 2218, 0], ['Raum', false, 112172, 21, 19, 0],
+    ['Goretzka', false, 2, 21, 13, 0], ['Morroni', true, 116312, 18, 2221, 1], ['Onana', true, 2, 7, 13, 3],
+    ['Kamara', true, 2, 18, 13, 3], ['Brandt', true, 245, 21, 10, 0], ['Mateta', false, 1799, 18, 13, 0],
+    ['Kean', true, 1745, 27, 31, 0], ['Godts', true, 73, 7, 16, 1],
+  ];
+  const squad = real.map(([name, inPos, club, nation, league], i) =>
+    normalizePlayer({ id: `r${i}`, name, rating: 80, positions: [inPos ? F433[i] : 'CDM'], club, nation, league }));
+  const c = chemistryFor(squad, F433);
+  assert.deepEqual(c.perPlayer.map((p) => p.chem), real.map((r) => r[5]));
+  assert.equal(c.total, 10);
+});
+
+// Points SBCs (FC 27 Work Area). Scores are EA's sbsScore values seen on the real Web App.
+test('points: cheapest fodder first, best cards kept, stops at the target', () => {
+  const c = (id, o) => normalizePlayer({ id, rating: 82, positions: ['CM'], price: 900, ...o });
+  const pool = [
+    c('dup', { duplicate: true, untradeable: true }),
+    c('untr', { untradeable: true }),
+    c('trade', {}),
+    c('star', { rating: 88, untradeable: true }),
+    c('promo', { special: true, untradeable: true }),
+  ];
+  const scores = { dup: 340, untr: 280, trade: 410, star: 900, promo: 500 };
+  const res = selectForScore(pool, scores, { target: 600, limit: 30 });
+  assert.deepEqual(res.cards.map((p) => p.id), ['dup', 'untr']);
+  assert.equal(res.score, 620);
+  assert.equal(res.reached, true);
+  assert.equal(res.candidates, 3); // 88-rated and special cards are protected
+});
+
+test('points: respects the card limit and reports a partial batch', () => {
+  const pool = Array.from({ length: 40 }, (_, i) => normalizePlayer({ id: `p${i}`, rating: 80, positions: ['ST'], untradeable: true }));
+  const scores = Object.fromEntries(pool.map((p) => [p.id, 180]));
+  const res = selectForScore(pool, scores, { target: 17000, limit: 30 });
+  assert.equal(res.cards.length, 30);
+  assert.equal(res.score, 5400);
+  assert.equal(res.reached, false);
+});
+
+test('points: drops cards the target does not need', () => {
+  const pool = [
+    normalizePlayer({ id: 'a', rating: 75, positions: ['ST'], untradeable: true, price: 100 }),
+    normalizePlayer({ id: 'b', rating: 83, positions: ['ST'], untradeable: true, price: 1200 }),
+  ];
+  // Per point, a (100/90) is cheaper than b (1200/410), so a goes in first; b alone covers 300.
+  const res = selectForScore(pool, { a: 90, b: 410 }, { target: 300 });
+  assert.deepEqual(res.cards.map((p) => p.id), ['b']);
+  assert.equal(res.score, 410);
 });

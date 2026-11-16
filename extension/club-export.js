@@ -81,15 +81,25 @@
   }
 
   // `until` lets pre-fill stop reading as soon as it has found the cards it needs.
+  // The real server can return fewer cards than asked for (77 of 91 on a real club) while
+  // the club repo still says endOfList: false, so a short page is NOT the end. Stop on an
+  // empty page, an explicit "retrieved all" flag, or a page that brings nothing new.
   async function readClubPlayers(onProgress, until) {
     const all = [];
+    const seen = new Set();
+    let offset = 0;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const res = await observe(window.services.Club.search(searchCriteria(page * PAGE_SIZE)), 'Club search');
+      const res = await observe(window.services.Club.search(searchCriteria(offset)), 'Club search');
       const items = res?.response?.items ?? res?.data?.items ?? [];
-      all.push(...items);
-      remember(items);
+      const fresh = items.filter((i) => i?.id != null && !seen.has(String(i.id)));
+      fresh.forEach((i) => seen.add(String(i.id)));
+      // Advance by what came back, not by the page size, so a short page can't skip cards.
+      offset += items.length;
+      all.push(...fresh);
+      remember(fresh);
       onProgress(`Reading club… ${all.length} cards`);
-      const exhausted = items.length < PAGE_SIZE || res?.response?.retrievedAll === true;
+      const exhausted = items.length === 0 || fresh.length === 0 ||
+        res?.response?.retrievedAll === true || res?.response?.endOfList === true;
       if (exhausted) { clubState.clubComplete = true; break; }
       if (until?.()) break;
       await pause();
@@ -97,10 +107,21 @@
     return all;
   }
 
+  // SBC storage holds at most 100 cards. Older Web Apps had requestStorageItems();
+  // FC 27 has searchStorageItems(criteria).
   async function readStorage() {
     const svc = window.services?.Item;
-    if (!svc?.requestStorageItems) return { items: [], note: 'SBC storage not available in this Web App version' };
-    const res = await observe(svc.requestStorageItems(), 'SBC storage');
+    let call;
+    if (svc?.requestStorageItems) call = () => svc.requestStorageItems();
+    else if (svc?.searchStorageItems) {
+      call = () => {
+        const c = searchCriteria(0);
+        c.count = 100;
+        return svc.searchStorageItems(c);
+      };
+    }
+    if (!call) return { items: [], note: 'SBC storage not available in this Web App version' };
+    const res = await observe(call(), 'SBC storage');
     const items = res?.response?.items ?? res?.data?.items ?? [];
     storageIds.clear();
     remember(items, true);
@@ -110,16 +131,36 @@
 
   // ---- Mapping EA items to FUT Assistant cards ----
 
+  // FC 27 keys league and club names by season, e.g. "global.leagueFull.2027.league13" and
+  // "global.teamabbr15.2027.team1". Find the season(s) in the Web App's string table once.
+  let seasonYears;
+  function nameSeasons() {
+    if (seasonYears) return seasonYears;
+    const table = tryCall(() => window.services.Localization.repository._collection);
+    const years = new Set();
+    if (table && typeof table === 'object') {
+      for (const k of Object.keys(table)) {
+        const m = /^global\.(?:leagueFull|teamabbr15)\.(\d{4})\./.exec(k);
+        if (m) years.add(m[1]);
+      }
+    }
+    seasonYears = [...years].sort().reverse();
+    return seasonYears;
+  }
+
   const localizeCache = new Map();
   function localizeName(kind, id) {
     if (id == null) return null;
     const key = `${kind}:${id}`;
     if (localizeCache.has(key)) return localizeCache.get(key);
     const loc = window.services?.Localization;
+    const seasons = nameSeasons();
     const candidates = {
       nation: [`search.nationName.nation${id}`],
-      league: [`global.leagueFull.${id}`, `global.leagueabbr5.${id}`, `search.leagueName.league${id}`],
-      club: [`global.teamFull.${id}`, `global.teamabbr15.${id}`, `search.teamName.team${id}`],
+      league: [...seasons.flatMap((y) => [`global.leagueFull.${y}.league${id}`, `global.leagueabbr15.${y}.league${id}`]),
+        `global.leagueFull.${id}`, `global.leagueabbr5.${id}`, `search.leagueName.league${id}`],
+      club: [...seasons.flatMap((y) => [`global.teamFull.${y}.team${id}`, `global.teamabbr15.${y}.team${id}`]),
+        `global.teamFull.${id}`, `global.teamabbr15.${id}`, `search.teamName.team${id}`],
     }[kind];
     let name = null;
     for (const k of candidates) {
@@ -226,7 +267,8 @@
     if (document.getElementById('fut-assistant-export')) return;
     const host = document.createElement('div');
     host.id = 'fut-assistant-export';
-    host.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;';
+    // Sits just right of the Web App's 96px left nav so it never covers Store/Club.
+    host.style.cssText = 'position:fixed;left:108px;bottom:12px;z-index:2147483647;';
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `
       <style>

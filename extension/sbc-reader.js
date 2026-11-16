@@ -14,6 +14,8 @@
   // Invert an enum-like object { NAME: 12 } → { 12: 'NAME' }.
   const invert = (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => typeof v === 'number').map(([k, v]) => [v, k]));
 
+  // Confirmed on FC 27: EA's ItemRatingTier enum is BRONZE=1, SILVER=2, GOLD=3, and real SBCs
+  // ("Exactly Gold", "Silver: Min. 3 Players", "Min. Bronze") use these values.
   const QUALITY = { 1: 'bronze', 2: 'silver', 3: 'gold' };
   const QUALITY_RANK = { bronze: 1, silver: 2, gold: 3 };
 
@@ -84,9 +86,9 @@
           // "Player quality: Min Silver" → every player silver or better, and so on.
           const allowed = Object.keys(QUALITY_RANK).filter((name) =>
             scopeName === 'LOWER' ? QUALITY_RANK[name] <= v : scopeName === 'EXACT' ? QUALITY_RANK[name] === v : QUALITY_RANK[name] >= v);
-          return { req: { kind: 'each', filter: { quality: allowed } }, uncertain: true };
+          return { req: { kind: 'each', filter: { quality: allowed } } };
         }
-        return { req: { kind: 'count', filter: { quality: q }, ...bounds(scopeName, n) }, uncertain: true };
+        return { req: { kind: 'count', filter: { quality: q }, ...bounds(scopeName, n) } };
       }
       case 'PLAYER_RARITY_GROUP':
         // Group 4 is believed to be "Rare" (rare + special cards). Other groups aren't mapped yet.
@@ -132,11 +134,18 @@
       }
     }
 
-    if (!sbc.squadSize) {
-      // Smaller SBCs lock some spots ("bricks"); count the open ones.
-      const slots = tryCall(() => challenge.squad.getFieldPlayers?.()) ?? [];
-      const open = slots.filter((s) => !tryCall(() => s?.isBrick?.()));
-      if (open.length && open.length < 11) sbc.squadSize = open.length;
+    // Smaller SBCs lock some spots ("bricks"); count the open ones.
+    const slots = tryCall(() => challenge.squad.getFieldPlayers?.()) ?? [];
+    const open = slots.filter((s) => !tryCall(() => s?.isBrick?.()));
+    if (!sbc.squadSize && open.length && open.length < 11) sbc.squadSize = open.length;
+    // Chemistry must be scored on the squad's real slots (e.g. f433: GK, RB, CB, CB, LB, CM…),
+    // because pre-fill places cards into the squad as it stands. Solving against other
+    // formations gave 17 chemistry on paper and 10 in EA's squad.
+    const position = window.__futAssistantExport?.position;
+    const openPositions = position ? open.map((s) => position(s?.position?.typeName ?? tryCall(() => s.getPosition().typeName))) : [];
+    if (openPositions.length && openPositions.every(Boolean)) {
+      sbc.formations = [openPositions];
+      sbc.formationName = challenge.formation ?? null;
     }
     for (const u of unsupported) sbc.requirements.push({ kind: 'unsupported', source: u, label: `Not understood: ${u.key} ${u.scope} ${u.values.join('/')}${u.count >= 0 ? ` ×${u.count}` : ''}` });
 
@@ -152,5 +161,5 @@
     };
   }
 
-  window.__futAssistantSbc = { readOpenSbc, mapPair, kvEntries };
+  window.__futAssistantSbc = { readOpenSbc, mapPair, kvEntries, screenText };
 })();

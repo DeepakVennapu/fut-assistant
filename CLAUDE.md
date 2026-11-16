@@ -54,11 +54,59 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - `prefill.js`: finds the open SBC, places cards, saves the draft once, enforces the 30 s wait.
   - `sbc-reader.js`: maps EA's requirement data to the solver's format, using the Web App's
     `SBCEligibilityKey` and `SBCEligibilityScope` tables at runtime.
+  - `work-area.js`: points SBCs. Selects cards in the Work Area like a tap; never reviews or submits.
   - `one-click.js`: **Solve & pre-fill**. Reads the SBC, uses the cached club, solves, fills.
 
 ## Status
 
-- Merged to `main` (PR #1 code, PR #2 this file). 18 tests pass (`npm test`). The Playwright tests run the extension
+- 27 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
+  `npx playwright install chromium`, otherwise they skip). They run the extension against a
+  **mock** of the Web App whose shapes now follow what the real FC 27 Web App returns.
+- **Tested on EA's real FC 27 Web App on 2026-11-16** (branch `fix/real-webapp-testing`):
+  - Panel loads (bottom-left, right of EA's 96px nav so it doesn't cover Store/Club).
+  - Club export: 77 club + 2 storage cards, matching EA's "Players: 77 items" and SBC Storage.
+    Names, ratings, positions (numeric ids 0=GK … 27=LW), nation/league/club names,
+    untradeable (`tradable`), `_rareflag` (0, 3, 87) all checked against the screen.
+  - Requirements: read correctly on 3 squad SBCs (league/nation counts, same-league/nation/club,
+    CLUB_ID with two clubs, PLAYER_QUALITY per player, PLAYER_LEVEL count, chemistry). Key names
+    match `SBCEligibilityKey`; scope is GREATER=0/LOWER=1/EXACT=2. Quality 1/2/3 =
+    bronze/silver/gold is confirmed (EA's `ItemRatingTier`).
+  - Solve & pre-fill on "Red Bull Wiiings Challenge" (f433): EA showed 6/6 requirements, rating
+    81, chemistry 14/33, the same as the status line. No 87+ or special cards used. Not submitted.
+  - Refuses correctly when the club can't do it ("3 Leagues & 2 Nations").
+- **What FC 27 looks like inside** (found read-only):
+  - Open SBC: `getCurrentController().childViewControllers[0].viewModel._challenge`;
+    squad SBCs are `type: "OPEN_CHALLENGE"` with `formation` like `"f433"`.
+  - Slots: `squad.getFieldPlayers()[i].position` = `{ id, typeId, name: 'RCB', typeName: 'CB' }`.
+  - EA's own local checks: `challenge.meetsRequirements()`, `isRequirementMet(req)`,
+    `squad.getChemistry()`, `squad.getRating()`. One-click reports these after filling.
+  - Names: `global.leagueFull.<season>.league<id>`, `global.teamabbr15.<season>.team<id>`
+    (season e.g. 2027), `search.nationName.nation<id>`; missing keys localize to `*key`.
+  - Club search can return fewer cards than asked for while more remain; storage is
+    `services.Item.searchStorageItems(criteria)`.
+- **Still unverified:**
+  - Brick SBCs (fewer than 11 spots): none were available to test.
+  - PLAYER_RARITY_GROUP 4 = "Rare" (still shown as "⚠ double-check").
+  - Loan skipping (the test club had no loans).
+  - Points SBCs: the SBC Storage tab's cards aren't considered (only the Club tab's are loaded),
+    and cards sitting in another SBC's saved draft can be selected. Their requirement keys
+    differ from squad SBCs (OVR Min 45 is `{40:[45],41:[1]}`) and aren't mapped; EA's own
+    `isItemSelectable` is used instead.
+- **Points SBCs (Work Area, `ONE_CLICK_CHALLENGE`, `squad: null`) are supported** by
+  `extension/work-area.js` + `src/points.js`, tested live on "Premier League POTM October":
+  30 cards selected, 12,480 points, EA's bar showed the same; Review Selection not pressed.
+  - View model: `childViewControllers[i].viewModel` with `_challenge`, `_itemEntityMap`,
+    `_itemScoreMap` (= each card's `sbsScore`), `_selectedItemIds`, `getSelectionLimit()` (30).
+  - A tap is `vm.toggleSelection(item)` + `view.setItemSelected(item, true)` +
+    `workAreaController._refreshSelectionControls()`, all local. EA loads the club in batches
+    (61, then 31) via `_ensureItemsForPage`.
+  - Card choice is cheapest per point using the placeholder prices, which favours higher-rated
+    cards below the protect rating (it picked an 85 and an 84). Lower "Keep cards rated" to
+    hold those back. Real prices would improve this.
+- The solver uses cheap fodder out of position when the chemistry requirement allows it
+  (e.g. a spare GK at RB). EA accepts this; it's a known behaviour, not a bug.
+||||||| 5c09935
+- Merged to `main` (PR #1). 18 tests pass (`npm test`). The Playwright tests run the extension
   against a **mock** of the Web App.
 - **Not yet tried on EA's real Web App.** The Web App's internals are undocumented, so these are
   guesses that may need fixing on first real use:
@@ -69,20 +117,18 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
 - When the owner reports a problem, ask for the **Copy SBC requirements** output (under More tools)
   and the exported club file's `meta.sampleKeys`.
 
-## Next step: test on the real Web App
+## Next step: finish testing on the real Web App
+
+Steps 1–4 of the first real test are done (see "Status"). What's left:
+
+1. An SBC with fewer than 11 players (locked "brick" spots): Solve & pre-fill, then compare with EA.
+2. An SBC with a "Rare" requirement, to confirm PLAYER_RARITY_GROUP 4.
+3. A club with a loan player, to confirm loans are skipped.
+4. Points SBCs: use the SBC Storage tab's cards, and avoid cards in another SBC's saved draft.
 
 This must run on the owner's own Mac, in their own Chrome, signed in by them. Don't do it from a
 cloud session: EA is blocked there, and a data-centre login is a needless account risk. The owner
 logs in; never handle their EA credentials. Never submit. Inspect EA internals read-only.
-
-1. Load `extension/` unpacked. Check that the panel appears in the bottom-left of the Web App.
-2. More tools → Export club. Check names, ratings, positions, nation/league/club names,
-   rare/special, untradeable, storage, and that loans are skipped. Look at `meta.sampleKeys`.
-3. Open a simple SBC, then a league/nation hybrid. More tools → Copy SBC requirements. Compare each
-   requirement with what EA shows.
-4. Solve & pre-fill. Check that cards appear and that EA's rating/chemistry match the status line;
-   check positions and that no protected cards were used. The owner reviews and submits.
-5. Repeat on an SBC with fewer than 11 players (locked "brick" spots).
 
 Fix on a branch. Update the mock in `test/extension.test.js` to the real object shapes found. Run
 `npm run build` if `src/` changed, then `npm test`. Record what's now verified under "Status", and

@@ -36,8 +36,10 @@ export function assignPositions(players, slots) {
   return slotOf;
 }
 
+// `formation` is a name from FORMATIONS or the open SBC's own slot positions as an array
+// (e.g. ['GK', 'RB', 'CB', ...]), which is what the Web App squad actually uses.
 export function chemistryFor(players, formation) {
-  const slots = FORMATIONS[formation];
+  const slots = Array.isArray(formation) ? formation : FORMATIONS[formation];
   if (!slots) throw new Error(`Unknown formation ${formation}`);
   const slotOf = assignPositions(players, slots);
   const counts = { club: new Map(), nation: new Map(), league: new Map() };
@@ -65,7 +67,8 @@ export function chemistryFor(players, formation) {
   return { formation, total: perPlayer.reduce((a, p) => a + p.chem, 0), perPlayer };
 }
 
-// SBCs let you pick the formation, so try each allowed one and keep the best.
+// Try each allowed formation and keep the best. When the SBC's own slots are known, the
+// caller passes just those, since pre-fill places cards into the squad as it stands.
 export function bestChemistry(players, formations = Object.keys(FORMATIONS)) {
   let best = null;
   for (const f of formations) {

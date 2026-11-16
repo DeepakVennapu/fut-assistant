@@ -5,7 +5,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const ORDER = ['model.js', 'rating.js', 'chemistry.js', 'requirements.js', 'solver.js', 'analyze.js'];
+const ORDER = ['model.js', 'rating.js', 'chemistry.js', 'requirements.js', 'solver.js', 'analyze.js', 'points.js'];
 const src = (f) => fileURLToPath(new URL(`../src/${f}`, import.meta.url));
 const out = fileURLToPath(new URL('../extension/solver-bundle.js', import.meta.url));
 
@@ -21,7 +21,7 @@ export function buildBundle() {
 (() => {
   'use strict';
 ${parts.join('\n')}
-  window.__futAssistantSolver = { normalizeClub, normalizePlayer, solve, analyzeRepeat, evaluate };
+  window.__futAssistantSolver = { normalizeClub, normalizePlayer, solve, analyzeRepeat, evaluate, selectForScore };
 })();
 `;
 }
