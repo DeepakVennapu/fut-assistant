@@ -1,110 +1,59 @@
-# FUT Assistant (proof of concept)
+# FUT Assistant
 
-A local SBC solver for EA FC Ultimate Team. It runs only on your machine and never logs in to EA.
+A local SBC helper for EA FC Ultimate Team. It runs on your computer inside EA's Web App page,
+never sees your EA login, and **never submits, buys, sells or lists anything**. You review and
+submit every SBC yourself.
 
-- **Solve once:** finds the cheapest squad from your club that meets an SBC's requirements.
-  Fodder order: storage duplicates → untradeables → tradeables. Cards rated 87+ are protected by default.
-- **How many times can I do it?:** solves repeatedly, setting used cards aside, and tells you how many
-  times your club covers the SBC, what stops the next attempt, and (optionally) what to buy for one more.
+Tested on EA's real FC 27 Web App (November 2026). See `CLAUDE.md` for what is and isn't verified.
 
-You build the squad yourself in the game or Web App, check it, and submit.
+## Install (Chrome)
 
-## Run it
+Needs Node 20+ only for tests and the optional local page. No dependencies.
 
-Needs Node 20+. No dependencies to install.
+1. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked** and pick the
+   `extension/` folder.
+2. Open the Web App and log in. The **FUT Assistant** panel appears at the bottom-left.
+3. After pulling new code, click the reload icon on the extension's card and reload the Web App.
 
-```bash
-cd fut-assistant
-npm start                 # web page at http://127.0.0.1:5177
-npm test                  # unit tests
-node src/cli.js list      # list sample SBCs
-node src/cli.js solve league-mix
-node src/cli.js repeat rated-84 --market
-node src/cli.js solve rated-84 --club my-club.json --protect 86
-```
+## Solve & pre-fill
 
-## One click: Solve & pre-fill (Chrome extension)
+Open an SBC and press **Solve & pre-fill**.
 
-Open an SBC in the Web App and press **Solve & pre-fill** in the FUT Assistant panel.
+1. It reads the SBC from the page (no network call) and your club (read once per session, one
+   page every 1.5–3 seconds, then reused).
+2. It picks the cards you lose least by giving up: storage duplicates, then untradeables, then
+   tradeables, using the value EA's own data gives each card.
+3. It **shows you the cards first**. Untick any you want to keep and press **Solve again without
+   unticked**; tick **Always keep the cards I untick** to keep them out for good.
+4. **Fill these** places the squad and saves the draft once. The status line then shows EA's own
+   rating, chemistry and whether EA says the requirements are met. If EA disagrees it says so.
 
-1. It reads the SBC's requirements from the page, with no network call.
-2. It uses your club. The first click each session reads your club and storage at the paced speed;
-   later clicks reuse that read.
-3. It solves on your computer with the same solver as the local page (bundled into
-   `extension/solver-bundle.js`).
-4. It places that one squad and saves the draft once. **It never submits.** It fills one squad per
-   click, waits 30 seconds between fills, and won't fill a squad that doesn't meet the requirements.
+What it keeps out: cards rated at or above **Keep cards rated** (default 87), your favourites,
+special cards, loans, and cards sitting in another SBC's saved draft. It fills one squad per click
+and waits 30 seconds between fills. It won't fill a squad that fails the requirements; if buying
+a few plain cards would fix that, it says which (prices are estimates).
 
-The status line shows rating, chemistry, card value, anything you need to check yourself (⚠), and
-roughly how many more times your club can do the same SBC.
+**Points SBCs** (a "Work Area" where you pick cards worth points, as player SBCs are in FC 27) work
+the same way: it selects up to 30 cards exactly as tapping them would, tells you whether your club
+can reach the target and in how many submissions, and leaves **Review Selection** to you.
 
-- Cards from an earlier fill this session are left out of the next one, on the assumption you
-  submitted it. Use **Re-read my club** if you didn't, or after opening packs.
-- "Keep cards rated … and up" protects your best cards (default 87).
-- The step-by-step tools from below are under **More tools**.
+- **Re-read my club**: use after opening packs, or if you cleared a draft the tool filled.
+- Settings, kept cards and the tool's record of its own fills live in this browser only.
 
-After changing anything in `src/`, run `npm run build` to refresh the bundle. A test fails if you forget.
+## Debug tools (in the panel)
 
-## Import your club (Chrome extension)
+- **Export club**: saves `fut-club-YYYY-MM-DD.json`. Its `meta.sampleKeys` lists EA's raw fields.
+- **Copy SBC requirements**: copies the open SBC's rules as the tool read them, with EA's text.
+- **Pre-fill open SBC**: places a squad from a code copied from the local page.
 
-`extension/` is a read-only Chrome extension. It adds a small **FUT Assistant** panel to EA's
-Web App with one button, **Export club (read-only)**. That button reads your club players and SBC
-storage through the Web App's own read calls and saves `fut-club-YYYY-MM-DD.json` to your computer.
+If something reads wrong after an EA update, these two outputs are what's needed to fix it.
 
-- It never buys, sells, lists, moves, quick-sells or submits anything.
-- It sends nothing anywhere except that file.
-- It reads one page of about 91 cards every 1.5–3 seconds, roughly the pace of scrolling your club by hand.
-- Loan players and cards locked in Evolutions are skipped.
+## Local page and CLI (optional)
 
-**Install:** open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and pick
-the `fut-assistant/extension` folder.
-
-**Use:**
-1. Open the Web App, log in, and wait for it to finish loading.
-2. Click **Export club**.
-3. In FUT Assistant (`npm start`), choose **Load a club JSON file…** and pick the saved file.
-   The page remembers it for next time.
-
-The Web App's internals are undocumented and change between seasons. If names show as
-`League 13` or positions look wrong, the mapping needs updating. Send the file's `meta` section
-(especially `meta.sampleKeys`) and it can be fixed. Chemistry and "same league/club" checks still
-work with ids instead of names, but sample SBCs that filter by league name (e.g. "Premier League")
-need the real name or must be edited.
-
-## Read an SBC's requirements (Chrome extension)
-
-With an SBC open in the Web App, press **Copy SBC requirements** in the panel. Then press
-**Paste SBC from Web App** in FUT Assistant. This reads only what's already on screen and makes no
-network calls.
-
-- League, nation and club rules come through as EA ids. The page shows names from your imported club.
-- Requirements read with a guessed meaning (player quality, "Rare") are marked **⚠ double-check**.
-- Requirements it doesn't understand (for example "first owner") are listed as **⚠ not checked**
-  rather than dropped. Check those yourself.
-- The requirement text EA shows is copied too, so you can compare it with what was read.
-
-## Pre-fill an SBC (Chrome extension)
-
-1. In FUT Assistant, solve the SBC and press **Copy pre-fill code**. Each attempt in
-   "How many times can I do it?" has its own code.
-2. In the Web App, open that SBC so its squad is on screen.
-3. Paste the code into the extension panel and press **Pre-fill open SBC**.
-4. Check the squad, then submit it yourself.
-
-What pre-fill does:
-- It looks up only the cards it hasn't already read this session (storage first, then club pages,
-  stopping as soon as it has them all).
-- It places them in their own positions where possible.
-- It saves the squad draft once, the same as EA's page does when you place cards by hand.
-
-What pre-fill never does:
-- It never submits, buys, sells or lists anything.
-- It fills only one squad per click and waits 30 seconds between fills.
-- It doesn't buy "buy" cards. It leaves those spots empty and names the cards for you.
-
-If the screen doesn't update after a fill, go back and reopen the SBC. If it says no open SBC was
-found, or that it found more than one, the Web App's internals have probably changed and the
-`findOpenChallenge` lookup in `extension/prefill.js` needs adjusting.
+`npm start` serves a page at http://127.0.0.1:5177 that solves against an exported club file and
+estimates how many times your club covers an SBC. `node src/cli.js list|solve|repeat` does the same
+in a terminal. Both use the same solver as the extension (`src/`); after changing `src/`, run
+`npm run build`, then `npm test`.
 
 ## Club file format
 
@@ -135,10 +84,13 @@ See `data/sbcs.json`. Requirement kinds: `teamRating`, `chemistry`, `count` (wit
 
 ## Known limits
 
-- Team rating and chemistry follow the community-known formulas; check edge cases against the game.
-- Icon/Hero chemistry boosts are approximated.
-- Market prices in `data/market-prices.json` are placeholders, and "buy" cards have no league, nation or club.
-- Repeat counts are a greedy estimate.
-- The club export and pre-fill are tested against a mock of the Web App, not EA's real one yet.
-- Using any extension inside the Web App is against EA's terms. Pre-fill writes a squad draft; that
+- Using any extension inside the Web App is against EA's terms. Filling while you submit yourself
   is lower risk than auto-submitting, but not zero.
+- Not yet verified on the real Web App: SBCs with locked "brick" spots, the "Rare" requirement,
+  loan skipping and favourites (the test club had none of these).
+- Card values are EA's market average, which is a guide, not a live price. Cards EA gives no value
+  fall back to an estimate by rating, as do "what to buy" suggestions.
+- The solver uses cheap cards out of position when the chemistry target allows it.
+- A draft the tool filled keeps its cards out of other SBCs for a week, or until **Re-read my club**.
+- Team rating and chemistry follow the community formulas; chemistry matched EA on a real squad.
+  Icon/Hero boosts are approximated.

@@ -59,7 +59,7 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
 
 ## Status
 
-- 27 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
+- 33 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
   `npx playwright install chromium`, otherwise they skip). They run the extension against a
   **mock** of the Web App whose shapes now follow what the real FC 27 Web App returns.
 - **Tested on EA's real FC 27 Web App on 2026-11-16** (branch `fix/real-webapp-testing`):
@@ -84,12 +84,29 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
     (season e.g. 2027), `search.nationName.nation<id>`; missing keys localize to `*key`.
   - Club search can return fewer cards than asked for while more remain; storage is
     `services.Item.searchStorageItems(criteria)`.
+- **Added after the first real test** (branch `feat/values-preview-protect`):
+  - Card values from EA's own item data (`_marketAverage`, else `_itemPriceLimits.minimum`).
+  - Preview before filling (`one-click.js` `plan()` → `apply()`), with untick-and-solve-again.
+  - Kept cards: favourites (`item.isFavorite === true`), unticked cards kept for good, and the
+    protect rating, all in `localStorage` under `futAssistant.*` (this browser only).
+  - Draft awareness (`prefill.js` `cardsInOtherDrafts`): the tool's own fills, remembered for a
+    week, plus squads of SBCs already loaded in `services.SBC.repository.sets`. EA's
+    `isItemInSquad` only covers the active squad.
+  - Points SBCs: SBC Storage tab loaded with `vm.setActiveTab('storage')` then back; whole club
+    loaded; `planBatches` says how many submissions the target takes or how far short it is.
+  - "What to buy" on a refusal (estimated prices; plain cards have no league/nation/club).
+  - The "can do this N more times" line was removed from the extension's status.
+  - Checked live on 2026-11-16: the preview (nothing placed until "Fill these"), EA values
+    (73 of 79 cards had a market average), the points "short by" line and draft awareness
+    (11 cards of a loaded draft left out). Found live and fixed: the Work Area creates an empty
+    state for every tab up front, and squad SBCs now keep active-squad cards too.
 - **Still unverified:**
+  - "Fill these" after a preview, the storage-tab load after its fix, and favourites (the test
+    club had none).
   - Brick SBCs (fewer than 11 spots): none were available to test.
   - PLAYER_RARITY_GROUP 4 = "Rare" (still shown as "⚠ double-check").
   - Loan skipping (the test club had no loans).
-  - Points SBCs: the SBC Storage tab's cards aren't considered (only the Club tab's are loaded),
-    and cards sitting in another SBC's saved draft can be selected. Their requirement keys
+  - Points SBCs: their requirement keys
     differ from squad SBCs (OVR Min 45 is `{40:[45],41:[1]}`) and aren't mapped; EA's own
     `isItemSelectable` is used instead.
 - **Points SBCs (Work Area, `ONE_CLICK_CHALLENGE`, `squad: null`) are supported** by
@@ -100,9 +117,8 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - A tap is `vm.toggleSelection(item)` + `view.setItemSelected(item, true)` +
     `workAreaController._refreshSelectionControls()`, all local. EA loads the club in batches
     (61, then 31) via `_ensureItemsForPage`.
-  - Card choice is cheapest per point using the placeholder prices, which favours higher-rated
-    cards below the protect rating (it picked an 85 and an 84). Lower "Keep cards rated" to
-    hold those back. Real prices would improve this.
+  - Card choice is cheapest per point. With placeholder prices it picked an 85 and an 84 on the
+    first live run; it now uses EA's values and shows the cards before selecting.
 - The solver uses cheap fodder out of position when the chemistry requirement allows it
   (e.g. a spare GK at RB). EA accepts this; it's a known behaviour, not a bug.
 ||||||| 5c09935
@@ -124,7 +140,7 @@ Steps 1–4 of the first real test are done (see "Status"). What's left:
 1. An SBC with fewer than 11 players (locked "brick" spots): Solve & pre-fill, then compare with EA.
 2. An SBC with a "Rare" requirement, to confirm PLAYER_RARITY_GROUP 4.
 3. A club with a loan player, to confirm loans are skipped.
-4. Points SBCs: use the SBC Storage tab's cards, and avoid cards in another SBC's saved draft.
+4. Favourites: mark one in the Web App and confirm it is kept out.
 
 This must run on the owner's own Mac, in their own Chrome, signed in by them. Don't do it from a
 cloud session: EA is blocked there, and a data-centre login is a needless account risk. The owner
@@ -136,9 +152,11 @@ open a PR. Don't merge without the owner's OK.
 
 ## Ideas not started
 
-- Read current prices (e.g. from FUTBIN or FUT.GG) instead of placeholders/estimates.
+- Live prices (e.g. from FUTBIN or FUT.GG). EA's market average is used now; a live source would
+  mean outside requests, which the hard rules currently forbid.
+- An overview of which SBCs the club can do right now. It would have to open every SBC set,
+  which means more requests to EA; deliberately not built.
 - Smarter "how many times" (it's greedy now).
-- Remember settings such as the protect rating between sessions.
 
 ## Working conventions
 

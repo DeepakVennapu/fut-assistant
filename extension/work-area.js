@@ -12,7 +12,7 @@
 
 (() => {
   'use strict';
-  const MAX_EXTRA_FETCHES = 4;
+  const MAX_EXTRA_FETCHES = 8; // paced; enough for a club of about 300 players
 
   const need = () => {
     const H = window.__futAssistantExport;
@@ -71,12 +71,32 @@
     }
   }
 
-  async function selectAndFill(found, options, onStatus, excludeIds = []) {
+  // Load the SBC Storage tab's cards (the cheapest fodder) the way tapping the tab does: one
+  // read for this challenge, then back to the tab that was showing. Only when storage has cards.
+  async function loadStorageTab(vm, onStatus) {
+    const { H } = need();
+    const STORAGE = window.OneClickSBCWorkAreaTab?.STORAGE ?? 'storage';
+    if (!H.storageIds.size || typeof vm.setActiveTab !== 'function' || !(vm._tabStates instanceof Map)) return;
+    // The real Web App creates an empty state for every tab up front; only a state with cards,
+    // or one marked complete, means the tab was really loaded.
+    const st = vm._tabStates.get(STORAGE);
+    if (st && (st.items?.length > 0 || st.retrievedAll)) return;
+    const back = H.tryCall(() => vm.getActiveTab()) ?? vm._activeTab;
+    if (back === STORAGE) return;
+    onStatus('Loading SBC storage into the Work Area…');
+    await H.pause();
+    const wait = (tab) => new Promise((resolve) => {
+      const timer = setTimeout(resolve, 30000);
+      try { vm.setActiveTab(tab, () => { clearTimeout(timer); resolve(); }); } catch { clearTimeout(timer); resolve(); }
+    });
+    await wait(STORAGE);
+    await wait(back);
+  }
+
+  // Works out the selection. Nothing is selected until apply() runs.
+  async function plan(found, options, onStatus) {
     const { H, P, X } = need();
     const { vm, controller } = found;
-    const wait = P.cooldownLeft();
-    if (wait > 0) throw new Error(`Please wait ${Math.ceil(wait / 1000)}s before the next pre-fill.`);
-
     const ch = vm.getChallenge?.() ?? vm._challenge;
     const name = ch.name ?? 'this SBC';
     const target = Number(ch.scoreRequirement) || 0;
@@ -84,9 +104,9 @@
     const remaining = Math.max(0, target - submitted);
     if (!target) throw new Error(`Couldn't read the points target of "${name}".`);
     if (!remaining) throw new Error(`"${name}" already has all ${target.toLocaleString()} points.`);
-    if ((H.tryCall(() => vm.getSelectedCount()) ?? 0) > 0) {
-      throw new Error('Some cards are already selected. Deselect them first; FUT Assistant won\'t change your selection.');
-    }
+    const alreadySelected = () => (H.tryCall(() => vm.getSelectedCount()) ?? 0) > 0;
+    const mine = 'Some cards are already selected. Press Remove All first; FUT Assistant won\'t change your selection.';
+    if (alreadySelected()) throw new Error(mine);
     const limit = Number(H.tryCall(() => vm.getSelectionLimit())) || 30;
 
     // Storage duplicates are the cheapest fodder; know which cards are in storage.
@@ -94,61 +114,85 @@
       onStatus('Reading SBC storage…');
       await H.readStorage().catch(() => {});
     }
+    await loadStorageTab(vm, onStatus);
 
+    const inDrafts = P.cardsInOtherDrafts(ch);
     const inSquad = (e) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(e.id))) === true;
     const scoreOf = (e) => Number(H.tryCall(() => vm._itemScoreMap.get(e.id)) ?? e.sbsScore) || 0;
     const usable = () => [...vm._itemEntityMap.values()].filter((e) =>
-      H.tryCall(() => vm.isItemSelectable(e)) !== false && scoreOf(e) > 0 && !inSquad(e) &&
+      H.tryCall(() => vm.isItemSelectable(e)) !== false && scoreOf(e) > 0 && !inSquad(e) && !inDrafts.has(String(e.id)) &&
       !(Number(e.loans) > 0 || H.tryCall(() => e.isLimitedUse?.())));
-    // Enough loaded when the cheapest 'limit' cards could already cover what's needed, or
-    // there are plenty more cards than one submission can take.
-    await loadMore(vm, () => usable().length >= limit * 3, onStatus);
+    // The whole club is needed to say whether the target can be reached at all.
+    await loadMore(vm, () => false, onStatus);
 
     const entities = usable();
     const byId = new Map(entities.map((e) => [String(e.id), e]));
     const cards = entities.map((e) => X.normalizePlayer(H.toCard(e, H.storageIds.has(String(e.id)))));
     const scores = new Map(entities.map((e) => [String(e.id), scoreOf(e)]));
-    const sel = X.selectForScore(cards, scores, {
-      target: remaining, limit, protectMinRating: options.protectMinRating ?? 87, excludeIds,
-    });
+    const opts = {
+      target: remaining, limit,
+      protectMinRating: options.protectMinRating ?? 87,
+      protectFavorites: options.protectFavorites !== false,
+      protectIds: options.protectIds ?? [],
+      excludeIds: options.excludeIds ?? [],
+    };
+    const sel = X.selectForScore(cards, scores, opts);
     if (!sel.cards.length) {
-      throw new Error(`No usable cards for "${name}" (cards rated ${options.protectMinRating ?? 87}+, special cards and ` +
-        'cards in your active squad are kept).');
+      throw new Error(`No usable cards for "${name}" (cards rated ${opts.protectMinRating}+, favourites, special cards, ` +
+        'cards in your active squad and cards in other SBC drafts are kept).');
     }
+    const whole = X.planBatches(cards, scores, opts);
+    const outlook = whole.reachable
+      ? (whole.batches > 1 ? ` The full target takes ${whole.batches} submissions and ${whole.cards} of your cards.` : '')
+      : ` Your usable cards add up to ${whole.score.toLocaleString()} points: ${whole.shortBy.toLocaleString()} short of the ` +
+        `${remaining.toLocaleString()} still needed, so this SBC can't be finished without more cards or a lower "Keep cards rated".`;
 
-    onStatus('Selecting cards…');
-    const view = H.tryCall(() => controller.getView());
-    let selected = 0;
-    for (const c of sel.cards) {
-      const e = byId.get(String(c.id));
-      if (!e || H.tryCall(() => vm.isItemSelected(e))) continue;
-      if (H.tryCall(() => vm.isSelectionLimitReached())) break;
-      // Exactly what tapping a card does in the Work Area. Local only; nothing is sent.
-      if (vm.toggleSelection(e)) selected++;
-      H.tryCall(() => view?.setItemSelected(e, true));
-    }
-    H.tryCall(() => controller._refreshSelectionControls());
-    P.markFilled();
+    const apply = async (setStatus) => {
+      const wait = P.cooldownLeft();
+      if (wait > 0) throw new Error(`Please wait ${Math.ceil(wait / 1000)}s before the next pre-fill.`);
+      if (alreadySelected()) throw new Error(mine);
+      setStatus('Selecting cards…');
+      const view = H.tryCall(() => controller.getView());
+      let selected = 0;
+      for (const c of sel.cards) {
+        const e = byId.get(String(c.id));
+        if (!e || H.tryCall(() => vm.isItemSelected(e))) continue;
+        if (H.tryCall(() => vm.isSelectionLimitReached())) break;
+        // Exactly what tapping a card does in the Work Area. Local only; nothing is sent.
+        if (vm.toggleSelection(e)) selected++;
+        H.tryCall(() => view?.setItemSelected(e, true));
+      }
+      H.tryCall(() => controller._refreshSelectionControls());
+      P.markFilled();
 
-    const eaScore = Number(H.tryCall(() => vm.getSelectedScore()));
-    const eaCount = Number(H.tryCall(() => vm.getSelectedCount()));
-    const agrees = eaScore === sel.score && eaCount === sel.cards.length;
-    // Requirement lines only ("OVR Min: 45"); the same list on screen also holds the reward card.
-    const check = (window.__futAssistantSbc?.screenText?.() ?? []).filter((t) => t && !t.includes('\n') && t.includes(':'));
-    const left = remaining - (Number.isFinite(eaScore) ? eaScore : sel.score);
+      const eaScore = Number(H.tryCall(() => vm.getSelectedScore()));
+      const eaCount = Number(H.tryCall(() => vm.getSelectedCount()));
+      const agrees = eaScore === sel.score && eaCount === sel.cards.length;
+      // Requirement lines only ("OVR Min: 45"); the same list on screen also holds the reward card.
+      const check = (window.__futAssistantSbc?.screenText?.() ?? []).filter((t) => t && !t.includes('\n') && t.includes(':'));
+      const left = remaining - (Number.isFinite(eaScore) ? eaScore : sel.score);
+      return {
+        cards: sel.cards,
+        message: `Selected ${selected} card(s) · ${sel.score.toLocaleString()} points for "${name}" · card value ` +
+          `${Math.round(sel.cost).toLocaleString()}.` +
+          (agrees ? ` ✔ EA shows ${eaScore.toLocaleString()} points selected.`
+            : ` ✖ EA shows ${Number.isFinite(eaScore) ? eaScore.toLocaleString() : '?'} points for ${eaCount} card(s). ` +
+              'Check the selection before reviewing.') +
+          (left > 0 ? ` ${left.toLocaleString()} more needed after this; submit it, then click again for the next batch.`
+            : ' That covers the target.') +
+          (check.length ? ` ⚠ Check yourself: ${check.join('; ')}.` : '') +
+          ' Press Review Selection and submit it yourself.',
+      };
+    };
+
     return {
       cards: sel.cards,
-      message: `Selected ${selected} card(s) · ${sel.score.toLocaleString()} points for "${name}" · card value ` +
-        `${Math.round(sel.cost).toLocaleString()}.` +
-        (agrees ? ` ✔ EA shows ${eaScore.toLocaleString()} points selected.`
-          : ` ✖ EA shows ${Number.isFinite(eaScore) ? eaScore.toLocaleString() : '?'} points for ${eaCount} card(s). ` +
-            'Check the selection before reviewing.') +
-        (left > 0 ? ` ${left.toLocaleString()} more needed after this; submit it, then click again for the next batch.`
-          : ' That covers the target.') +
-        (check.length ? ` ⚠ Check yourself: ${check.join('; ')}.` : '') +
-        ' Press Review Selection and submit it yourself.',
+      summary: `Found ${sel.cards.length} card(s) worth ${sel.score.toLocaleString()} of the ${remaining.toLocaleString()} points ` +
+        `"${name}" still needs · card value ${Math.round(sel.cost).toLocaleString()}.${outlook}` +
+        (inDrafts.size ? ` Left out ${inDrafts.size} card(s) in other SBC drafts.` : ''),
+      apply,
     };
   }
 
-  window.__futAssistantWorkArea = { find, selectAndFill, looksLikeWorkArea };
+  window.__futAssistantWorkArea = { find, plan, looksLikeWorkArea };
 })();

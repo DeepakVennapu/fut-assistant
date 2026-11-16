@@ -14,6 +14,7 @@ import { qualityOf } from './model.js';
 export const DEFAULT_OPTIONS = {
   protectMinRating: 87,   // never use cards rated this or higher (unless untradeable duplicates)
   protectIds: [],         // never use these card ids
+  protectFavorites: true, // never use cards marked as favourites in the Web App
   excludeIds: [],         // skip these card ids for this run
   allowSpecial: false,    // allow promo/special cards as fodder
   market: null,           // { prices: { "84": 2200, ... } } adds "buy any N-rated" cards
@@ -60,16 +61,22 @@ export function marketCards(prices, size) {
   return out;
 }
 
+// Which of your cards may be used at all: not excluded, not protected (by id, favourite or
+// rating; untradeable storage duplicates are always fair game) and not special.
+export function usableFilter(opts) {
+  const protect = new Set(opts.protectIds.map(String));
+  const exclude = new Set(opts.excludeIds.map(String));
+  const isProtected = (p) => protect.has(p.id) || (opts.protectFavorites && p.favorite) ||
+    (p.rating >= opts.protectMinRating && !(p.duplicate && p.untradeable));
+  return (p) => !exclude.has(p.id) && !isProtected(p) && (opts.allowSpecial || !p.special);
+}
+
 export function buildCandidates(pool, sbc, opts) {
   const size = sbc.squadSize ?? 11;
   const each = (sbc.requirements ?? []).filter((r) => r.kind === 'each');
-  const protect = new Set(opts.protectIds.map(String));
-  const exclude = new Set(opts.excludeIds.map(String));
-  const isProtected = (p) =>
-    protect.has(p.id) || (p.rating >= opts.protectMinRating && !(p.duplicate && p.untradeable));
+  const usable = usableFilter(opts);
   const ok = (p) => each.every((r) => matches(p, r.filter));
-  const fromClub = pool.filter((p) =>
-    !exclude.has(p.id) && !isProtected(p) && (opts.allowSpecial || !p.special) && ok(p));
+  const fromClub = pool.filter((p) => usable(p) && ok(p));
   const fromMarket = opts.market ? marketCards(opts.market.prices, size).filter(ok) : [];
   return fromClub.concat(fromMarket);
 }

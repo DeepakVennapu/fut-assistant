@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FUT Assistant",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Solves the open EA FC SBC on your computer and pre-fills one squad for you to check. Never submits, buys, sells or lists anything.",
   "content_scripts": [
     {
