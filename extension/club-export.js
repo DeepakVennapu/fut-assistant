@@ -281,7 +281,7 @@
     },
     set(key, value) { try { localStorage.setItem(`futAssistant.${key}`, JSON.stringify(value)); } catch { /* private mode */ } },
   };
-  const settings = () => ({ protectMinRating: 87, preview: true, protectFavorites: true, ...store.get('settings', {}) });
+  const settings = () => ({ protectMinRating: 87, preview: true, protectFavorites: true, protectSquad: true, ...store.get('settings', {}) });
   const saveSettings = (patch) => store.set('settings', { ...settings(), ...patch });
   // Cards you told the tool to always keep: { id: name }.
   const protectedCards = () => store.get('protected', {});
@@ -329,6 +329,7 @@
         <div class="title">FUT Assistant</div>
         <label class="opts">Keep cards rated <input id="protect" type="number" min="50" max="99" value="87"> and up</label>
         <label class="opts"><input id="keepFavs" type="checkbox" class="tick"> Keep my favourites</label>
+        <label class="opts"><input id="keepSquad" type="checkbox" class="tick"> Keep my active squad</label>
         <label class="opts"><input id="previewOn" type="checkbox" class="tick"> Show me the cards first</label>
         <button id="oneClick">Solve &amp; pre-fill</button>
         <div class="status" id="oneClickStatus">Open an SBC, then click. You check and submit yourself.</div>
@@ -364,6 +365,8 @@
     $('protect').value = cfg.protectMinRating;
     $('keepFavs').checked = cfg.protectFavorites;
     $('previewOn').checked = cfg.preview;
+    $('keepSquad').checked = cfg.protectSquad;
+    $('keepSquad').addEventListener('change', () => saveSettings({ protectSquad: $('keepSquad').checked }));
     $('protect').addEventListener('change', () => saveSettings({ protectMinRating: Number($('protect').value) || 87 }));
     $('keepFavs').addEventListener('change', () => saveSettings({ protectFavorites: $('keepFavs').checked }));
     $('previewOn').addEventListener('change', () => saveSettings({ preview: $('previewOn').checked }));
@@ -418,6 +421,7 @@
     const options = () => ({
       protectMinRating: Number($('protect').value) || 87,
       protectFavorites: $('keepFavs').checked,
+      protectSquad: $('keepSquad').checked,
       protectIds: Object.keys(protectedCards()),
       excludeIds: unticked,
     });

@@ -60,9 +60,13 @@
   const cardNote = (p) => [p.slot, p.duplicate ? 'storage' : p.untradeable ? 'untr.' : 'tradeable', coins(p.price)].filter(Boolean).join(' · ');
 
   // When the club can't do it: would buying a few plain cards make it possible? Prices are
-  // estimates by rating, and "any N-rated" cards have no league, nation or club, so this only
-  // helps where rating or quality is what's missing.
+  // estimates by rating. "Any N-rated" cards have no league, nation or club, so the hint is
+  // only given for SBCs without such rules (live, it once suggested bronzes for a club rule).
   function whatToBuy(X, club, sbc, opts) {
+    // Only where "any N-rated card" is a fair answer: no league, nation or club rules.
+    const plain = (sbc.requirements ?? []).every((r) => ['teamRating', 'chemistry', 'playerChem'].includes(r.kind) ||
+      ((r.kind === 'each' || r.kind === 'count') && Object.keys(r.filter ?? {}).every((k) => ['minRating', 'maxRating', 'quality'].includes(k))));
+    if (!plain) return '';
     try {
       const prices = Object.fromEntries(BUY_RATINGS.map((r) => [r, X.estimatePrice(r)]));
       const res = X.solve(club, sbc, { ...opts, market: { prices }, restarts: 2, iterations: 2000 });
@@ -89,8 +93,10 @@
 
     const club = X.normalizeClub(data);
     const inDrafts = P.cardsInOtherDrafts(challenge);
-    // Cards in your active squad stay there (EA lists them; drafts are handled above).
-    const inSquad = club.filter((p) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(p.id))) === true).map((p) => p.id);
+    // Cards in your active squad (starters, subs and reserves; EA lists them) stay there unless
+    // "Keep my active squad" is off. Drafts are handled above.
+    const inSquad = options.protectSquad === false ? []
+      : club.filter((p) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(p.id))) === true).map((p) => p.id);
     const opts = {
       protectMinRating: options.protectMinRating ?? 87,
       protectFavorites: options.protectFavorites !== false,
@@ -102,7 +108,8 @@
       const why = res.squad.length
         ? res.evaluation.results.filter((r) => !r.ok).map((r) => `${r.label} (best: ${r.actual})`).join('; ')
         : res.message;
-      throw new Error(`Can't complete this with your club. ${why}.${whatToBuy(X, club, sbc, opts)}`);
+      const kept = inSquad.length ? ` ${inSquad.length} card(s) in your active squad were kept; untick "Keep my active squad" to allow them.` : '';
+      throw new Error(`Can't complete this with your club. ${why}.${kept}${whatToBuy(X, club, sbc, opts)}`);
     }
 
     const ev = res.evaluation;
