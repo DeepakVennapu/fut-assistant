@@ -249,7 +249,7 @@ test('reads the open SBC requirements and the solver can use them', { skip: !chr
     assert.deepEqual(sbc.formations, [['GK', 'RB', 'CB', 'CB', 'LB', 'RM', 'CM', 'CM', 'LM', 'ST', 'ST']]);
     assert.equal(sbc.formationName, 'f442');
     assert.equal(data.unsupported, 1);
-    assert.equal(data.uncertain, 2);
+    assert.equal(data.uncertain, 1); // rarity group 4 only; quality values are confirmed
     assert.deepEqual(data.eaText, ['Team Rating: Min. 80', 'First Owner: Exactly 1']);
     const kinds = sbc.requirements.map((r) => [r.kind, r.attr ?? r.filter ?? null, r.min ?? null, r.max ?? null]);
     assert.deepEqual(kinds, [
@@ -268,7 +268,7 @@ test('reads the open SBC requirements and the solver can use them', { skip: !chr
     await page.locator('#fut-assistant-export #readSbc').click();
     await page.locator('#fut-assistant-export #readStatus').filter({ hasText: /Copied|Stopped/ }).waitFor();
     assert.match(await page.locator('#fut-assistant-export #readStatus').textContent(),
-      /Copied 7 requirement\(s\) for "Test Hybrid" \(1 not understood, 2 to double-check\)/);
+      /Copied 7 requirement\(s\) for "Test Hybrid" \(1 not understood, 1 to double-check\)/);
 
     const exported = await page.evaluate(() => window.__futAssistantExport.buildExport(window.__club, window.__storage, []));
     const res = solve(normalizeClub(exported), sbc);
