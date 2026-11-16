@@ -20,7 +20,9 @@ const readerScript = fileURLToPath(new URL('../extension/sbc-reader.js', import.
 
 // Builds a fake Web App: 120 club players over two pages, 3 storage cards, one loan, one Icon.
 function mockWebApp() {
-  const names = { 'search.nationName.nation14': 'England', 'global.leagueFull.13': 'Premier League', 'global.teamFull.1': 'Arsenal' };
+  // Shaped like FC 27: league/club names are keyed by season, missing keys come back as "*key".
+  const names = { 'search.nationName.nation14': 'England', 'global.leagueFull.2027.league13': 'Premier League',
+    'global.teamabbr15.2027.team1': 'Arsenal' };
   const make = (i, extra = {}) => ({
     id: 5000 + i, definitionId: 200000 + (i % 110), type: 'player', rating: 70 + (i % 20), rareflag: i % 3 === 0 ? 1 : 0,
     nationId: i % 2 ? 14 : 18, leagueId: i % 4 ? 13 : 53, teamId: i % 5 ? 1 : 9,
@@ -36,9 +38,10 @@ function mockWebApp() {
   const observable = (payload) => ({ observe(_ctx, cb) { setTimeout(() => cb(this, { success: true, response: payload }), 5); } });
   window.__calls = [];
   window.services = {
-    Club: { search(c) { window.__calls.push(`search:${c.offset}`); return observable({ items: window.__club.slice(c.offset, c.offset + c.count) }); } },
-    Item: { requestStorageItems() { window.__calls.push('storage'); return observable({ items: window.__storage }); } },
-    Localization: { localize: (k) => names[k] ?? k },
+    // Like the real server, a page can hold fewer cards than asked for (77 of 91) while more remain.
+    Club: { search(c) { window.__calls.push(`search:${c.offset}`); return observable({ items: window.__club.slice(c.offset, c.offset + Math.min(c.count, 77)) }); } },
+    Item: { searchStorageItems(c) { window.__calls.push(`storage:${c.count}`); return observable({ items: window.__storage }); } },
+    Localization: { localize: (k) => names[k] ?? `*${k}`, repository: { _collection: names } },
   };
   window.__club = club;
   window.__storage = storage;
@@ -59,7 +62,7 @@ test('extension exports a club the solver can use, using read calls only', { ski
     const data = JSON.parse(readFileSync(await download.path(), 'utf8'));
     const calls = await page.evaluate(() => window.__calls);
 
-    assert.deepEqual(calls, ['search:0', 'search:91', 'storage']);
+    assert.deepEqual(calls, ['search:0', 'search:77', 'search:122', 'storage:100']);
     assert.equal(data.meta.clubCards, 121); // 120 + the Icon; the loan is skipped
     assert.equal(data.meta.storageCards, 3);
     assert.equal(data.meta.skipped.loansOrLocked, 1);
@@ -267,7 +270,7 @@ test('one click: reads the SBC, solves with the club, places one squad, never su
     assert.equal(await page.evaluate(() => window.__saved), 1);
     assert.equal(await page.evaluate(() => window.__submitted), 0);
     // Club read once (storage + 2 pages); pre-fill found everything in that read.
-    assert.deepEqual(await page.evaluate(() => window.__calls), ['storage', 'search:0', 'search:91']);
+    assert.deepEqual(await page.evaluate(() => window.__calls), ['storage:100', 'search:0', 'search:77', 'search:122']);
 
     // Straight away again: blocked by the 30 s wait, before any reading or solving.
     await page.locator('#fut-assistant-export #oneClick').click();
