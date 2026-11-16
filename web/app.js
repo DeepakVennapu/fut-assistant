@@ -1,0 +1,251 @@
+import { normalizeClub } from '../src/model.js';
+import { solve } from '../src/solver.js';
+import { analyzeRepeat } from '../src/analyze.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const coins = (n) => Math.round(n).toLocaleString();
+
+let club = [];
+let sbcs = [];
+let market = null;
+
+async function loadJson(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`Could not load ${path}`);
+  return r.json();
+}
+
+function setClub(data, label) {
+  club = normalizeClub(data);
+  const storage = club.filter((p) => p.duplicate).length;
+  const untradeable = club.filter((p) => p.untradeable && !p.duplicate).length;
+  $('clubInfo').textContent = `${label}: ${club.length} cards (${storage} in storage, ${untradeable} untradeable)`;
+}
+
+function readSaved() {
+  try {
+    const text = localStorage.getItem('futAssistant.club');
+    return text ? { text, name: localStorage.getItem('futAssistant.clubName') ?? 'Imported club' } : null;
+  } catch { return null; }
+}
+
+function addSavedOption(name) {
+  let opt = $('clubSource').querySelector('option[value="saved"]');
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = 'saved';
+    $('clubSource').insertBefore(opt, $('clubSource').firstChild);
+  }
+  opt.textContent = `My club (${name})`;
+}
+
+// EA requirements use ids; label them with names from the imported club where possible.
+function nameFor(attr, id) {
+  const nameAttr = { nationId: 'nation', leagueId: 'league', clubId: 'club' }[attr];
+  const hit = nameAttr && club.find((p) => p[attr] === id && p[nameAttr]);
+  return hit ? hit[nameAttr] : `${(nameAttr ?? attr)} ${id}`;
+}
+
+const RARITY_NAMES = { 0: 'Common', 1: 'Rare', 3: 'Team of the Week' };
+
+function labelFor(r) {
+  const b = [r.min != null ? `Min ${r.min}` : null, r.max != null ? `Max ${r.max}` : null].filter(Boolean).join(', ');
+  const f = r.filter ?? {};
+  const idKey = ['nationId', 'leagueId', 'clubId'].find((k) => f[k]);
+  if (r.kind === 'count' && idKey) return `${f[idKey].map((id) => nameFor(idKey, id)).join(' / ')} players: ${b}`;
+  if (r.kind === 'count' && f.rareflag) return `${f.rareflag.map((x) => RARITY_NAMES[x] ?? `Rarity ${x}`).join(' / ')} players: ${b}`;
+  if (r.kind === 'count' && f.rare) return `Rare players: ${b}`;
+  if (r.kind === 'each' && f.quality) return `Player quality: ${[].concat(f.quality).join(' or ')}`;
+  return r.label;
+}
+
+function importSbc(text) {
+  let data;
+  try { data = JSON.parse(text); } catch { throw new Error('That is not SBC data copied from the extension.'); }
+  if (data?.kind !== 'fut-assistant-sbc' || !data.sbc) throw new Error('That is not SBC data copied from the extension.');
+  const sbc = data.sbc;
+  for (const r of sbc.requirements) { const l = labelFor(r); if (l) r.label = l; }
+  sbcs.unshift(sbc);
+  $('sbcSelect').innerHTML = sbcs.map((s, i) => `<option value="${i}">${i === 0 ? 'From Web App: ' : ''}${esc(s.name)}</option>`).join('');
+  $('sbcSelect').value = '0';
+  $('sbcJson').value = JSON.stringify(sbc, null, 2);
+
+  const issues = [];
+  if (!data.enumsFound) issues.push("Couldn't read EA's requirement names, so most requirements may be missing.");
+  if (data.unsupported) issues.push(`${data.unsupported} requirement(s) weren't understood. They're listed and not checked.`);
+  if (data.uncertain) issues.push(`${data.uncertain} requirement(s) were read with a guessed meaning (marked ⚠).`);
+  const ea = (data.eaText ?? []).map((t) => `<li>${esc(t)}</li>`).join('');
+  $('sbcInfo').innerHTML = `<div class="callout">
+      <b>${esc(sbc.name)}</b> · ${sbc.requirements.length} requirement(s)${sbc.squadSize ? ` · ${sbc.squadSize} players` : ''}
+      ${issues.map((i) => `<div class="warn">⚠ ${esc(i)}</div>`).join('')}
+      ${ea ? `<div class="muted" style="margin-top:4px">EA shows:</div><ul>${ea}</ul>` : ''}
+    </div>`;
+}
+
+function currentSbc() {
+  return JSON.parse($('sbcJson').value);
+}
+
+function options() {
+  return {
+    protectMinRating: Number($('protect').value),
+    allowSpecial: $('allowSpecial').checked,
+    market: $('useMarket').checked ? market : null,
+  };
+}
+
+const source = (p) => (p.virtual ? '<span class="buy">Buy</span>'
+  : p.duplicate ? 'Storage' : p.untradeable ? 'Untradeable' : 'Tradeable');
+
+function squadTable(res) {
+  const rows = res.squad.map((p) => `<tr>
+    <td>${esc(p.slot ?? '–')}</td><td class="num">${p.rating}</td><td>${esc(p.name)}</td>
+    <td>${esc(p.league ?? '–')}</td><td>${esc(p.club ?? '–')}</td><td>${esc(p.nation ?? '–')}</td>
+    <td>${p.rare ? 'Rare' : ''}</td><td>${source(p)}</td><td class="num">${p.chem}</td><td class="num">${coins(p.price)}</td>
+  </tr>`).join('');
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Pos</th><th>OVR</th><th>Name</th><th>League</th><th>Club</th><th>Nation</th><th></th><th>Source</th><th>Chem</th><th>Value</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function summary(res) {
+  const ev = res.evaluation;
+  const reqs = ev.results.map((r) => {
+    if (r.unchecked) return `<li class="warn">⚠ ${esc(r.label)} <span class="muted">(not checked; check it yourself)</span></li>`;
+    const flag = r.uncertain ? ' <span class="warn" title="Read from EA with a guessed meaning">⚠ double-check</span>' : '';
+    return `<li class="${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓' : '✗'} ${esc(r.label)} <span class="muted">(got ${r.actual})</span>${flag}</li>`;
+  }).join('');
+  return `<div class="chips">
+      <span class="chip">Rating ${ev.rating}</span>
+      <span class="chip">Chemistry ${ev.chemistry?.total ?? '–'} (${esc(ev.chemistry?.formation ?? '–')})</span>
+      <span class="chip">Card value used ${coins(res.cost)}</span>
+    </div><ul class="reqs">${reqs}</ul>`;
+}
+
+// Pre-fill codes shown on screen, keyed by button index.
+let codes = [];
+
+function prefillCode(res, sbc) {
+  return JSON.stringify({
+    kind: 'fut-assistant-prefill',
+    v: 1,
+    sbc: sbc.name,
+    createdAt: new Date().toISOString(),
+    cards: res.squad.map((p) => (p.virtual
+      ? { buy: true, name: p.name, rating: p.rating }
+      : { id: p.id, name: p.name, rating: p.rating, slot: p.slot })),
+  });
+}
+
+function copyButton(res, sbc) {
+  if (!res.feasible) return '';
+  codes.push(prefillCode(res, sbc));
+  return `<div class="row"><button class="primary copy" data-code="${codes.length - 1}">Copy pre-fill code</button>
+    <span class="muted copied"></span></div>`;
+}
+
+function renderSolve(res, sbc) {
+  codes = [];
+  const buys = res.squad.filter((p) => p.virtual);
+  $('output').innerHTML = `<h2>${esc(sbc.name)}</h2>
+    <div class="big ${res.feasible ? 'ok' : 'bad'}">${esc(res.message)}</div>
+    ${buys.length ? `<p class="buy">Needs ${buys.length} card(s) from the market, about ${coins(buys.reduce((a, p) => a + p.price, 0))} coins.</p>` : ''}
+    ${summary(res)}${res.squad.length ? squadTable(res) : ''}
+    ${copyButton(res, sbc)}
+    <p class="note">Paste the code into the extension panel in EA's Web App with this SBC open, or build the squad by hand.
+      Either way, check it and submit it yourself.</p>`;
+}
+
+function renderRepeat(res, sbc) {
+  codes = [];
+  const attempts = res.attempts.map((a, i) => `<details ${i === 0 ? 'open' : ''}>
+      <summary>Attempt ${i + 1} · rating ${a.evaluation.rating} · card value ${coins(a.cost)}</summary>
+      ${summary(a)}${squadTable(a)}${copyButton(a, sbc)}</details>`).join('');
+  const next = res.nextWithMarket;
+  $('output').innerHTML = `<h2>${esc(sbc.name)}</h2>
+    <div class="big ${res.times ? 'ok' : 'bad'}">${res.times}${res.capped ? '+' : ''} time(s) with cards you own</div>
+    <p class="muted">Card value across all attempts: ${coins(res.totalCost)}.
+      ${res.capped ? 'Stopped counting at the limit.' : ''} This is a greedy estimate; a different split could occasionally get one more.</p>
+    ${res.blockers.length ? `<p><b>What stops the next one:</b></p><ul class="reqs">${res.blockers.map((b) => `<li class="bad">✗ ${esc(b)}</li>`).join('')}</ul>` : ''}
+    ${next ? `<details open><summary class="buy">One more by buying ${next.buys.length} card(s) for about ${coins(next.buyCost)} coins</summary>${summary(next)}${squadTable(next)}${copyButton(next, sbc)}</details>` : ''}
+    ${attempts}`;
+}
+
+function run(kind) {
+  let sbc;
+  try { sbc = currentSbc(); } catch (e) { alert(`Requirements JSON is invalid: ${e.message}`); return; }
+  const buttons = [$('solveBtn'), $('repeatBtn')];
+  buttons.forEach((b) => { b.disabled = true; });
+  $('output').innerHTML = '<h2>Working…</h2><p class="muted">Solving on this machine.</p>';
+  setTimeout(() => {
+    try {
+      if (kind === 'solve') renderSolve(solve(club, sbc, options()), sbc);
+      else renderRepeat(analyzeRepeat(club, sbc, options()), sbc);
+    } catch (e) {
+      $('output').innerHTML = `<h2>Error</h2><p class="bad">${esc(e.message)}</p>`;
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }, 20);
+}
+
+async function init() {
+  [sbcs, market] = await Promise.all([loadJson('../data/sbcs.json'), loadJson('../data/market-prices.json')]);
+  setClub(await loadJson('../data/sample-club.json'), 'Sample club');
+  $('sbcSelect').innerHTML = sbcs.map((s, i) => `<option value="${i}">${esc(s.name)}</option>`).join('');
+  const showSbc = () => { $('sbcJson').value = JSON.stringify(sbcs[$('sbcSelect').value], null, 2); };
+  $('sbcSelect').addEventListener('change', showSbc);
+  showSbc();
+
+  // Reuse the last imported club, if this browser has one saved.
+  const saved = readSaved();
+  if (saved) {
+    try {
+      setClub(JSON.parse(saved.text), saved.name);
+      addSavedOption(saved.name);
+      $('clubSource').value = 'saved';
+    } catch { /* ignore a corrupt saved copy */ }
+  }
+
+  $('clubSource').addEventListener('change', async () => {
+    const v = $('clubSource').value;
+    if (v === 'file') $('clubFile').click();
+    else if (v === 'saved') { const s = readSaved(); if (s) setClub(JSON.parse(s.text), s.name); }
+    else setClub(await loadJson('../data/sample-club.json'), 'Sample club');
+  });
+  $('clubFile').addEventListener('change', async () => {
+    const f = $('clubFile').files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      setClub(JSON.parse(text), f.name);
+      try { localStorage.setItem('futAssistant.club', text); localStorage.setItem('futAssistant.clubName', f.name); } catch { /* storage unavailable */ }
+      addSavedOption(f.name);
+      $('clubSource').value = 'saved';
+    } catch (e) { alert(`Could not read club file: ${e.message}`); }
+  });
+  $('output').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button.copy');
+    if (!btn) return;
+    const text = codes[Number(btn.dataset.code)];
+    const note = btn.parentElement.querySelector('.copied');
+    try {
+      await navigator.clipboard.writeText(text);
+      note.textContent = 'Copied. Paste it into the extension panel.';
+    } catch {
+      window.prompt('Copy this pre-fill code:', text);
+    }
+  });
+  $('pasteSbc').addEventListener('click', async () => {
+    let text = null;
+    try { text = await navigator.clipboard.readText(); } catch { /* permission denied or unsupported */ }
+    if (!text || !text.includes('fut-assistant-sbc')) text = window.prompt('Paste the SBC requirements copied from the extension:');
+    if (!text) return;
+    try { importSbc(text); } catch (e) { alert(e.message); }
+  });
+  $('solveBtn').addEventListener('click', () => run('solve'));
+  $('repeatBtn').addEventListener('click', () => run('repeat'));
+}
+
+init().catch((e) => { $('output').innerHTML = `<h2>Error</h2><p class="bad">${esc(e.message)}</p>`; });
