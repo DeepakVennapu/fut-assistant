@@ -668,6 +668,25 @@ test('cards in another SBC\'s draft are left out', { skip: !chromium && 'playwri
   }
 });
 
+test('"Keep my active squad" can be turned off; no buying hint when the SBC has club or nation rules', { skip: !chromium && 'playwright not installed', timeout: 90000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await loadAll(page);
+    await page.evaluate(() => { window.__futAssistantExport.pause = () => Promise.resolve(); });
+    // Everything except three cards is in the active squad.
+    await page.evaluate(() => { window.services.SBC.isItemInSquad = (id) => id > 5002; });
+    const text = await solveAndApply(page);
+    assert.match(text, /Stopped: Can't complete this with your club\. Only \d+ usable players/);
+    assert.match(text, /card\(s\) in your active squad were kept; untick "Keep my active squad" to allow them\./);
+    assert.doesNotMatch(text, /Buying/); // "Test Hybrid" has league and nation rules
+    const off = await page.evaluate(async () => (await window.__futAssistantOneClick.plan({ protectSquad: false }, () => {})).cards.length);
+    assert.equal(off, 11);
+  } finally {
+    await browser.close();
+  }
+});
+
 test('when the club falls short, it says what buying would fix', { skip: !chromium && 'playwright not installed', timeout: 90000 }, async () => {
   const browser = await chromium.launch();
   try {

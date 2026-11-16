@@ -59,7 +59,7 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
 
 ## Status
 
-- 33 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
+- 34 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
   `npx playwright install chromium`, otherwise they skip). They run the extension against a
   **mock** of the Web App whose shapes now follow what the real FC 27 Web App returns.
 - **Tested on EA's real FC 27 Web App on 2026-11-16** (branch `fix/real-webapp-testing`):
@@ -100,9 +100,14 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
     (73 of 79 cards had a market average), the points "short by" line and draft awareness
     (11 cards of a loaded draft left out). Found live and fixed: the Work Area creates an empty
     state for every tab up front, and squad SBCs now keep active-squad cards too.
+  - Checked live after that: "Fill these" on "Red Bull Wiiings Challenge" (EA showed 6/6, rating
+    82, chemistry 27/33, same as the status line), the SBC Storage tab load on a points SBC
+    (both storage cards offered, view left on the Club tab), and "Keep my active squad".
+  - "Keep my active squad" is a setting (on by default). EA's `isItemInSquad` covers starters,
+    subs and reserves: 23 cards on the test club, which made one SBC unsolvable with it on.
+  - The buying hint is only given for SBCs without league, nation or club rules.
 - **Still unverified:**
-  - "Fill these" after a preview, the storage-tab load after its fix, and favourites (the test
-    club had none).
+  - Favourites (the test club had none).
   - Brick SBCs (fewer than 11 spots): none were available to test.
   - PLAYER_RARITY_GROUP 4 = "Rare" (still shown as "⚠ double-check").
   - Loan skipping (the test club had no loans).

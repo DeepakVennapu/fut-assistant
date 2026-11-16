@@ -29,9 +29,11 @@ Open an SBC and press **Solve & pre-fill**.
    rating, chemistry and whether EA says the requirements are met. If EA disagrees it says so.
 
 What it keeps out: cards rated at or above **Keep cards rated** (default 87), your favourites,
+your active squad (starters, subs and reserves; untick **Keep my active squad** to allow them),
 special cards, loans, and cards sitting in another SBC's saved draft. It fills one squad per click
 and waits 30 seconds between fills. It won't fill a squad that fails the requirements; if buying
-a few plain cards would fix that, it says which (prices are estimates).
+a few plain cards would fix that, it says which (prices are estimates; only for SBCs without
+league, nation or club rules).
 
 **Points SBCs** (a "Work Area" where you pick cards worth points, as player SBCs are in FC 27) work
 the same way: it selects up to 30 cards exactly as tapping them would, tells you whether your club

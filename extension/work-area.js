@@ -117,7 +117,7 @@
     await loadStorageTab(vm, onStatus);
 
     const inDrafts = P.cardsInOtherDrafts(ch);
-    const inSquad = (e) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(e.id))) === true;
+    const inSquad = (e) => options.protectSquad !== false && H.tryCall(() => window.services.SBC.isItemInSquad(Number(e.id))) === true;
     const scoreOf = (e) => Number(H.tryCall(() => vm._itemScoreMap.get(e.id)) ?? e.sbsScore) || 0;
     const usable = () => [...vm._itemEntityMap.values()].filter((e) =>
       H.tryCall(() => vm.isItemSelectable(e)) !== false && scoreOf(e) > 0 && !inSquad(e) && !inDrafts.has(String(e.id)) &&
