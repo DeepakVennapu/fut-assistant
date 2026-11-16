@@ -55,6 +55,8 @@
       isHero: Boolean(raw.isHero),
       untradeable: Boolean(raw.untradeable),
       duplicate: Boolean(raw.duplicate),
+      // Marked as a favourite in the Web App; kept out of SBCs by default.
+      favorite: Boolean(raw.favorite),
       price: raw.price != null ? Number(raw.price) : estimatePrice(rating, rare),
       quality: qualityOf(rating),
       virtual: false,
@@ -304,6 +306,7 @@
   const DEFAULT_OPTIONS = {
     protectMinRating: 87,   // never use cards rated this or higher (unless untradeable duplicates)
     protectIds: [],         // never use these card ids
+    protectFavorites: true, // never use cards marked as favourites in the Web App
     excludeIds: [],         // skip these card ids for this run
     allowSpecial: false,    // allow promo/special cards as fodder
     market: null,           // { prices: { "84": 2200, ... } } adds "buy any N-rated" cards
@@ -350,16 +353,22 @@
     return out;
   }
 
+  // Which of your cards may be used at all: not excluded, not protected (by id, favourite or
+  // rating; untradeable storage duplicates are always fair game) and not special.
+  function usableFilter(opts) {
+    const protect = new Set(opts.protectIds.map(String));
+    const exclude = new Set(opts.excludeIds.map(String));
+    const isProtected = (p) => protect.has(p.id) || (opts.protectFavorites && p.favorite) ||
+      (p.rating >= opts.protectMinRating && !(p.duplicate && p.untradeable));
+    return (p) => !exclude.has(p.id) && !isProtected(p) && (opts.allowSpecial || !p.special);
+  }
+
   function buildCandidates(pool, sbc, opts) {
     const size = sbc.squadSize ?? 11;
     const each = (sbc.requirements ?? []).filter((r) => r.kind === 'each');
-    const protect = new Set(opts.protectIds.map(String));
-    const exclude = new Set(opts.excludeIds.map(String));
-    const isProtected = (p) =>
-      protect.has(p.id) || (p.rating >= opts.protectMinRating && !(p.duplicate && p.untradeable));
+    const usable = usableFilter(opts);
     const ok = (p) => each.every((r) => matches(p, r.filter));
-    const fromClub = pool.filter((p) =>
-      !exclude.has(p.id) && !isProtected(p) && (opts.allowSpecial || !p.special) && ok(p));
+    const fromClub = pool.filter((p) => usable(p) && ok(p));
     const fromMarket = opts.market ? marketCards(opts.market.prices, size).filter(ok) : [];
     return fromClub.concat(fromMarket);
   }
@@ -525,13 +534,10 @@
     const target = Math.max(0, Number(options.target) || 0);
     const limit = Math.max(1, Number(options.limit) || 30);
     const scoreOf = (p) => Number(scores instanceof Map ? scores.get(p.id) : scores?.[p.id]) || 0;
-    const protect = new Set(opts.protectIds.map(String));
-    const exclude = new Set(opts.excludeIds.map(String));
-    const isProtected = (p) =>
-      protect.has(p.id) || (p.rating >= opts.protectMinRating && !(p.duplicate && p.untradeable));
+    const usable = usableFilter(opts);
 
     const cands = pool
-      .filter((p) => !p.virtual && scoreOf(p) > 0 && !exclude.has(p.id) && !isProtected(p) && (opts.allowSpecial || !p.special))
+      .filter((p) => !p.virtual && scoreOf(p) > 0 && usable(p))
       .map((p) => ({ card: p, score: scoreOf(p), cost: cardCost(p, opts.weights) }));
     const available = cands.reduce((a, c) => a + c.score, 0);
 
@@ -567,5 +573,25 @@
     };
   }
 
-  window.__futAssistantSolver = { normalizeClub, normalizePlayer, solve, analyzeRepeat, evaluate, selectForScore };
+  // Can the usable cards reach the target at all, and in how many submissions of `limit` cards?
+  // Greedy, like selectForScore: batch after batch until the target is met or cards run out.
+  function planBatches(pool, scores, options = {}) {
+    const target = Math.max(0, Number(options.target) || 0);
+    let left = pool.slice();
+    let total = 0;
+    let batches = 0;
+    let cards = 0;
+    while (total < target && batches < 50) {
+      const sel = selectForScore(left, scores, { ...options, target: target - total });
+      if (!sel.cards.length) break;
+      const used = new Set(sel.cards.map((c) => c.id));
+      left = left.filter((p) => !used.has(p.id));
+      total += sel.score;
+      cards += sel.cards.length;
+      batches++;
+    }
+    return { reachable: target > 0 && total >= target, batches, cards, score: total, shortBy: Math.max(0, target - total) };
+  }
+
+  window.__futAssistantSolver = { normalizeClub, normalizePlayer, solve, analyzeRepeat, evaluate, selectForScore, planBatches, estimatePrice };
 })();

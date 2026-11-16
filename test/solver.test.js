@@ -6,7 +6,7 @@ import { evaluate } from '../src/requirements.js';
 import { normalizePlayer } from '../src/model.js';
 import { solve } from '../src/solver.js';
 import { analyzeRepeat } from '../src/analyze.js';
-import { selectForScore } from '../src/points.js';
+import { selectForScore, planBatches } from '../src/points.js';
 
 let nextId = 1;
 const card = (o) => normalizePlayer({
@@ -159,4 +159,23 @@ test('points: drops cards the target does not need', () => {
   const res = selectForScore(pool, { a: 90, b: 410 }, { target: 300 });
   assert.deepEqual(res.cards.map((p) => p.id), ['b']);
   assert.equal(res.score, 410);
+});
+
+test('favourites are kept by default and can be released', () => {
+  const pool = Array.from({ length: 12 }, (_, i) => card({ positions: [F442[i % 11]], favorite: i === 0, price: i === 0 ? 1 : 500 }));
+  const sbc = { requirements: [{ kind: 'teamRating', min: 80 }] };
+  const kept = solve(pool, sbc);
+  assert.equal(kept.feasible, true);
+  assert.ok(!kept.squad.some((p) => p.id === pool[0].id), 'the favourite is not used even though it is cheapest');
+  const released = solve(pool, sbc, { protectFavorites: false });
+  assert.ok(released.squad.some((p) => p.id === pool[0].id));
+});
+
+test('points: says how many submissions the target takes, or how far short the club is', () => {
+  const pool = Array.from({ length: 40 }, (_, i) => normalizePlayer({ id: `b${i}`, rating: 80, positions: ['ST'], untradeable: true }));
+  const scores = Object.fromEntries(pool.map((p) => [p.id, 180]));
+  const ok = planBatches(pool, scores, { target: 6000, limit: 30 });
+  assert.deepEqual([ok.reachable, ok.batches, ok.cards], [true, 2, 34]);
+  const short = planBatches(pool, scores, { target: 17000, limit: 30 });
+  assert.deepEqual([short.reachable, short.score, short.shortBy], [false, 7200, 9800]);
 });

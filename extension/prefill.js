@@ -183,6 +183,7 @@
     if (window.services?.SBC?.saveChallenge) await observe(window.services.SBC.saveChallenge(challenge), 'Save squad');
     try { challenge.onDataChange?.notify?.({ squad: challenge.squad }); } catch { /* view may refresh on its own */ }
     lastFill = Date.now();
+    recordDraft(challenge, wanted);
 
     const buyNote = toBuy.length ? ` Buy and place ${toBuy.length} more yourself: ${toBuy.map((c) => c.name).join(', ')}.` : '';
     return `Placed ${wanted.length} card(s).${buyNote} Check the squad, then submit it yourself. ` +
@@ -206,10 +207,50 @@
     };
   }
 
+  // ---- Cards already sitting in another SBC's saved draft ----
+  // EA only lists the active squad's cards (services.SBC.isItemInSquad), so drafts are
+  // found two ways: the fills this tool made (remembered for a week in this browser), and
+  // the squads of any SBCs the Web App has already loaded this session. No network calls.
+  const DRAFT_DAYS = 7;
+  function draftRecords() {
+    const { store } = H();
+    const all = store.get('drafts', {});
+    const cutoff = Date.now() - DRAFT_DAYS * 86400000;
+    for (const k of Object.keys(all)) if (!(all[k]?.at > cutoff)) delete all[k];
+    return all;
+  }
+  function recordDraft(challenge, ids) {
+    if (challenge?.id == null) return;
+    const { store } = H();
+    const all = draftRecords();
+    all[String(challenge.id)] = { name: challenge.name ?? '', ids: ids.map(String), at: Date.now() };
+    store.set('drafts', all);
+  }
+  const forgetDrafts = () => H().store.set('drafts', {});
+
+  function cardsInOtherDrafts(challenge) {
+    const { tryCall } = H();
+    const mine = challenge?.id == null ? null : String(challenge.id);
+    const ids = new Set();
+    for (const [id, rec] of Object.entries(draftRecords())) if (id !== mine) rec.ids.forEach((x) => ids.add(String(x)));
+    const list = (c) => (!c ? [] : Array.isArray(c) ? c : Object.values(c._collection ?? c));
+    for (const set of list(tryCall(() => window.services.SBC.repository.sets))) {
+      for (const ch of list(tryCall(() => set.challenges) ?? tryCall(() => set.getChallenges()))) {
+        if (!ch?.squad || ch === challenge || (mine && String(ch.id) === mine)) continue;
+        for (const slot of tryCall(() => ch.squad.getFieldPlayers()) ?? []) {
+          const item = slot?.item ?? tryCall(() => slot.getItem());
+          if (item?.id && Number(item.definitionId) > 0) ids.add(String(item.id));
+        }
+      }
+    }
+    return ids;
+  }
+
   // The 30 s wait is shared with points-SBC selections (work-area.js).
   const markFilled = () => { lastFill = Date.now(); };
 
   window.__futAssistantPrefill = {
     run, parseCode, placeCards, findOpenChallenge, searchTree, eaCheck, cooldownLeft, markFilled, COOLDOWN_MS,
+    cardsInOtherDrafts, draftRecords, forgetDrafts,
   };
 })();

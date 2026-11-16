@@ -21,7 +21,7 @@ export function buildBundle() {
 (() => {
   'use strict';
 ${parts.join('\n')}
-  window.__futAssistantSolver = { normalizeClub, normalizePlayer, solve, analyzeRepeat, evaluate, selectForScore };
+  window.__futAssistantSolver = { normalizeClub, normalizePlayer, solve, analyzeRepeat, evaluate, selectForScore, planBatches, estimatePrice };
 })();
 `;
 }

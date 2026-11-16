@@ -51,6 +51,8 @@ export function normalizePlayer(raw) {
     isHero: Boolean(raw.isHero),
     untradeable: Boolean(raw.untradeable),
     duplicate: Boolean(raw.duplicate),
+    // Marked as a favourite in the Web App; kept out of SBCs by default.
+    favorite: Boolean(raw.favorite),
     price: raw.price != null ? Number(raw.price) : estimatePrice(rating, rare),
     quality: qualityOf(rating),
     virtual: false,

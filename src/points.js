@@ -6,7 +6,7 @@
 // protection as the squad solver (storage duplicates → untradeables → tradeables, 87+ and
 // special cards kept). It only proposes a selection. It never talks to EA.
 
-import { mergeOptions, cardCost } from './solver.js';
+import { mergeOptions, cardCost, usableFilter } from './solver.js';
 
 // pool: normalized cards; scores: Map or object of card id → points.
 // options: target (points still needed), limit (cards per submission), plus solver options.
@@ -15,13 +15,10 @@ export function selectForScore(pool, scores, options = {}) {
   const target = Math.max(0, Number(options.target) || 0);
   const limit = Math.max(1, Number(options.limit) || 30);
   const scoreOf = (p) => Number(scores instanceof Map ? scores.get(p.id) : scores?.[p.id]) || 0;
-  const protect = new Set(opts.protectIds.map(String));
-  const exclude = new Set(opts.excludeIds.map(String));
-  const isProtected = (p) =>
-    protect.has(p.id) || (p.rating >= opts.protectMinRating && !(p.duplicate && p.untradeable));
+  const usable = usableFilter(opts);
 
   const cands = pool
-    .filter((p) => !p.virtual && scoreOf(p) > 0 && !exclude.has(p.id) && !isProtected(p) && (opts.allowSpecial || !p.special))
+    .filter((p) => !p.virtual && scoreOf(p) > 0 && usable(p))
     .map((p) => ({ card: p, score: scoreOf(p), cost: cardCost(p, opts.weights) }));
   const available = cands.reduce((a, c) => a + c.score, 0);
 
@@ -55,4 +52,24 @@ export function selectForScore(pool, scores, options = {}) {
     available,
     cost: Math.round(picked.reduce((a, c) => a + c.card.price, 0)),
   };
+}
+
+// Can the usable cards reach the target at all, and in how many submissions of `limit` cards?
+// Greedy, like selectForScore: batch after batch until the target is met or cards run out.
+export function planBatches(pool, scores, options = {}) {
+  const target = Math.max(0, Number(options.target) || 0);
+  let left = pool.slice();
+  let total = 0;
+  let batches = 0;
+  let cards = 0;
+  while (total < target && batches < 50) {
+    const sel = selectForScore(left, scores, { ...options, target: target - total });
+    if (!sel.cards.length) break;
+    const used = new Set(sel.cards.map((c) => c.id));
+    left = left.filter((p) => !used.has(p.id));
+    total += sel.score;
+    cards += sel.cards.length;
+    batches++;
+  }
+  return { reachable: target > 0 && total >= target, batches, cards, score: total, shortBy: Math.max(0, target - total) };
 }

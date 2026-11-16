@@ -185,6 +185,17 @@
       tryCall(() => item.isEnrolledInAcademy?.()));
   }
 
+  // What the card is worth, from EA's own data already on the card (no outside site):
+  // the market average when EA has one, else the lowest price EA allows for it. With
+  // neither, no price is set and the solver falls back to its estimate by rating.
+  function cardValue(item) {
+    const avg = Number(firstDefined(item._marketAverage, tryCall(() => item.getMarketAverage?.())));
+    if (avg > 0) return { price: avg, priceSource: 'ea-average' };
+    const min = Number(firstDefined(item._itemPriceLimits?.minimum, tryCall(() => item.getPriceLimits?.()?.minimum)));
+    if (min > 0) return { price: min, priceSource: 'ea-minimum' };
+    return { priceSource: 'estimate' };
+  }
+
   function toCard(item, fromStorage) {
     const definitionId = Number(firstDefined(item.definitionId, item.resourceId, item.id));
     const rareflag = Number(firstDefined(item.rareflag, item.rareFlag, 0));
@@ -217,6 +228,8 @@
       isHero,
       untradeable: fromStorage || Boolean(firstDefined(item.untradeable, tradeable === undefined ? undefined : !tradeable, false)),
       duplicate: fromStorage,
+      favorite: item.isFavorite === true || tryCall(() => (typeof item.isFavorite === 'function' ? item.isFavorite() : false)) === true,
+      ...cardValue(item),
     };
   }
 
@@ -260,6 +273,24 @@
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
+  // ---- Settings and protected cards, remembered in this browser only (localStorage) ----
+
+  const store = {
+    get(key, fallback) {
+      try { const v = JSON.parse(localStorage.getItem(`futAssistant.${key}`)); return v ?? fallback; } catch { return fallback; }
+    },
+    set(key, value) { try { localStorage.setItem(`futAssistant.${key}`, JSON.stringify(value)); } catch { /* private mode */ } },
+  };
+  const settings = () => ({ protectMinRating: 87, preview: true, protectFavorites: true, ...store.get('settings', {}) });
+  const saveSettings = (patch) => store.set('settings', { ...settings(), ...patch });
+  // Cards you told the tool to always keep: { id: name }.
+  const protectedCards = () => store.get('protected', {});
+  const protectCards = (cards) => {
+    const all = protectedCards();
+    for (const c of cards) all[String(c.id)] = c.name ?? '';
+    store.set('protected', all);
+  };
+
   // ---- Small floating panel (shadow DOM so it can't clash with EA's styles) ----
 
   let busy = false;
@@ -273,7 +304,7 @@
     root.innerHTML = `
       <style>
         .box { font: 13px/1.4 system-ui, sans-serif; background: #171a21; color: #e6e8ec; border: 1px solid #2a2f39;
-          border-radius: 10px; padding: 10px 12px; width: 230px; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
+          border-radius: 10px; padding: 10px 12px; width: 250px; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
         .title { font-weight: 700; margin-bottom: 6px; }
         button { width: 100%; padding: 7px; border: 0; border-radius: 6px; background: #4c8dff; color: #fff; font: inherit; cursor: pointer; }
         button:disabled { opacity: .6; cursor: wait; }
@@ -284,6 +315,11 @@
           border: 1px solid #2a2f39; border-radius: 6px; font: 11px ui-monospace, monospace; resize: vertical; }
         .secondary { background: #2b3240; }
         .opts { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; color: #9aa3af; }
+        .opts input.tick { width: auto; margin: 0; }
+        .list { max-height: 190px; overflow: auto; margin: 6px 0; border: 1px solid #2a2f39; border-radius: 6px; padding: 4px 6px; }
+        .list label { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 1px 0; }
+        .list .meta { color: #9aa3af; margin-left: auto; white-space: nowrap; }
+        .gap { margin-top: 6px; }
         .opts input { width: 46px; background: #0f1115; color: #e6e8ec; border: 1px solid #2a2f39; border-radius: 4px; padding: 2px 4px; }
         .link { background: none; color: #9aa3af; text-decoration: underline; padding: 0; width: auto; margin-top: 6px; font-size: 12px; }
         details { margin-top: 8px; } summary { cursor: pointer; color: #9aa3af; font-size: 12px; }
@@ -292,11 +328,21 @@
         <span class="x" title="Hide">✕</span>
         <div class="title">FUT Assistant</div>
         <label class="opts">Keep cards rated <input id="protect" type="number" min="50" max="99" value="87"> and up</label>
+        <label class="opts"><input id="keepFavs" type="checkbox" class="tick"> Keep my favourites</label>
+        <label class="opts"><input id="previewOn" type="checkbox" class="tick"> Show me the cards first</label>
         <button id="oneClick">Solve &amp; pre-fill</button>
         <div class="status" id="oneClickStatus">Open an SBC, then click. You check and submit yourself.</div>
+        <div id="preview" hidden>
+          <div class="list" id="previewList"></div>
+          <label class="opts"><input id="rememberKeep" type="checkbox" class="tick"> Always keep the cards I untick</label>
+          <button id="applyPlan">Fill these</button>
+          <button id="resolvePlan" class="secondary gap">Solve again without unticked</button>
+          <button id="cancelPlan" class="link">Cancel</button>
+        </div>
         <button id="refreshClub" class="link">Re-read my club</button>
+        <button id="clearKept" class="link" hidden></button>
         <details>
-        <summary>More tools</summary>
+        <summary>Debug tools</summary>
         <hr>
         <button id="export">Export club (read-only)</button>
         <div class="status" id="exportStatus">Reads your club and SBC storage, then saves a file.</div>
@@ -310,29 +356,96 @@
         </details>
       </div>`;
 
-    // One click: read the open SBC, solve with your club, place the squad. Never submits.
+    // One click: read the open SBC, solve with your club, show the cards, then place them.
+    // Never submits.
     const oneStatus = root.getElementById('oneClickStatus');
-    const runOneClick = async (refresh) => {
+    const $ = (id) => root.getElementById(id);
+    const cfg = settings();
+    $('protect').value = cfg.protectMinRating;
+    $('keepFavs').checked = cfg.protectFavorites;
+    $('previewOn').checked = cfg.preview;
+    $('protect').addEventListener('change', () => saveSettings({ protectMinRating: Number($('protect').value) || 87 }));
+    $('keepFavs').addEventListener('change', () => saveSettings({ protectFavorites: $('keepFavs').checked }));
+    $('previewOn').addEventListener('change', () => saveSettings({ preview: $('previewOn').checked }));
+
+    const showKept = () => {
+      const n = Object.keys(protectedCards()).length;
+      $('clearKept').hidden = n === 0;
+      $('clearKept').textContent = `Stop keeping ${n} card(s) I unticked`;
+    };
+    showKept();
+    $('clearKept').addEventListener('click', () => { store.set('protected', {}); showKept(); });
+
+    let plan = null;
+    let unticked = [];
+    const closePreview = () => { plan = null; $('preview').hidden = true; $('previewList').textContent = ''; };
+    const showPreview = () => {
+      const list = $('previewList');
+      list.textContent = '';
+      for (const c of plan.cards) {
+        const row = document.createElement('label');
+        const box = document.createElement('input');
+        box.type = 'checkbox'; box.checked = true; box.className = 'tick'; box.dataset.id = c.id;
+        const name = document.createElement('span');
+        name.textContent = `${c.rating} ${c.name}`;
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = c.note ?? '';
+        row.append(box, name, meta);
+        list.appendChild(row);
+      }
+      $('preview').hidden = false;
+    };
+    const untickedNow = () => [...$('previewList').querySelectorAll('input:not(:checked)')].map((b) => b.dataset.id);
+
+    const guarded = async (fn) => {
       if (busy) return;
-      const oc = window.__futAssistantOneClick;
-      if (!oc) { oneStatus.textContent = 'Solver scripts did not load.'; return; }
+      if (!window.__futAssistantOneClick) { oneStatus.textContent = 'Solver scripts did not load.'; return; }
       if (!webAppReady()) { oneStatus.textContent = 'Log in and wait for the Web App to finish loading.'; return; }
       busy = true;
       root.querySelectorAll('button').forEach((b) => { b.disabled = true; });
       try {
-        const set = (t) => { oneStatus.textContent = t; };
-        oneStatus.textContent = refresh
-          ? await oc.refreshClub(set)
-          : await oc.solveAndFill({ protectMinRating: Number(root.getElementById('protect').value) || 87 }, set);
+        const msg = await fn((t) => { oneStatus.textContent = t; });
+        if (msg) oneStatus.textContent = msg;
       } catch (e) {
+        closePreview();
         oneStatus.textContent = `Stopped: ${e.message}`;
       } finally {
         busy = false;
         root.querySelectorAll('button').forEach((b) => { b.disabled = false; });
       }
     };
-    root.getElementById('oneClick').addEventListener('click', () => runOneClick(false));
-    root.getElementById('refreshClub').addEventListener('click', () => runOneClick(true));
+    const options = () => ({
+      protectMinRating: Number($('protect').value) || 87,
+      protectFavorites: $('keepFavs').checked,
+      protectIds: Object.keys(protectedCards()),
+      excludeIds: unticked,
+    });
+    const solveNow = (set) => window.__futAssistantOneClick.plan(options(), set).then((p) => {
+      plan = p;
+      if (!$('previewOn').checked) { const run = plan.apply; closePreview(); return run(set); }
+      showPreview();
+      return `${plan.summary} Untick any card you want to keep, then press Fill these.`;
+    });
+
+    $('oneClick').addEventListener('click', () => guarded((set) => { closePreview(); unticked = []; return solveNow(set); }));
+    $('resolvePlan').addEventListener('click', () => guarded((set) => {
+      const off = untickedNow();
+      if (!off.length) return 'Untick at least one card first.';
+      if ($('rememberKeep').checked) { protectCards(plan.cards.filter((c) => off.includes(String(c.id)))); showKept(); }
+      unticked = [...new Set([...unticked, ...off])];
+      closePreview();
+      return solveNow(set);
+    }));
+    $('applyPlan').addEventListener('click', () => guarded((set) => {
+      if (!plan) return 'Solve first.';
+      if (untickedNow().length) return 'Some cards are unticked. Press "Solve again without unticked", or tick them.';
+      const run = plan.apply;
+      closePreview();
+      return run(set);
+    }));
+    $('cancelPlan').addEventListener('click', () => { closePreview(); oneStatus.textContent = 'Cancelled. Nothing was placed.'; });
+    $('refreshClub').addEventListener('click', () => guarded((set) => { closePreview(); unticked = []; return window.__futAssistantOneClick.refreshClub(set); }));
     const btn = root.getElementById('export');
     const status = root.getElementById('exportStatus');
     root.querySelector('.x').addEventListener('click', () => host.remove());
@@ -401,7 +514,7 @@
 
   // Exposed for testing and for a manual run from the console.
   window.__futAssistantExport = {
-    buildExport, toCard, position, readClubPlayers, readStorage, mountPanel, observe, tryCall, firstDefined,
+    buildExport, toCard, cardValue, position, settings, protectedCards, store, readClubPlayers, readStorage, mountPanel, observe, tryCall, firstDefined,
     pause, itemCache, storageIds, clubState, VERSION,
   };
 
