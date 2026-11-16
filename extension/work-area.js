@@ -77,7 +77,10 @@
     const { H } = need();
     const STORAGE = window.OneClickSBCWorkAreaTab?.STORAGE ?? 'storage';
     if (!H.storageIds.size || typeof vm.setActiveTab !== 'function' || !(vm._tabStates instanceof Map)) return;
-    if (vm._tabStates.has(STORAGE)) return;
+    // The real Web App creates an empty state for every tab up front; only a state with cards,
+    // or one marked complete, means the tab was really loaded.
+    const st = vm._tabStates.get(STORAGE);
+    if (st && (st.items?.length > 0 || st.retrievedAll)) return;
     const back = H.tryCall(() => vm.getActiveTab()) ?? vm._activeTab;
     if (back === STORAGE) return;
     onStatus('Loading SBC storage into the Work Area…');

@@ -96,9 +96,13 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
     loaded; `planBatches` says how many submissions the target takes or how far short it is.
   - "What to buy" on a refusal (estimated prices; plain cards have no league/nation/club).
   - The "can do this N more times" line was removed from the extension's status.
+  - Checked live on 2026-11-16: the preview (nothing placed until "Fill these"), EA values
+    (73 of 79 cards had a market average), the points "short by" line and draft awareness
+    (11 cards of a loaded draft left out). Found live and fixed: the Work Area creates an empty
+    state for every tab up front, and squad SBCs now keep active-squad cards too.
 - **Still unverified:**
-  - Favourites (the test club had none) and the storage-tab load on a real points SBC, unless
-    noted otherwise below.
+  - "Fill these" after a preview, the storage-tab load after its fix, and favourites (the test
+    club had none).
   - Brick SBCs (fewer than 11 spots): none were available to test.
   - PLAYER_RARITY_GROUP 4 = "Rare" (still shown as "⚠ double-check").
   - Loan skipping (the test club had no loans).

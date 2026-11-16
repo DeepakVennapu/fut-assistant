@@ -77,7 +77,7 @@
   }
 
   async function planSquad(options, onStatus) {
-    const { P, S, X } = need();
+    const { H, P, S, X } = need();
     const read = S.readOpenSbc();
     const { sbc } = read;
     if (!read.enumsFound) throw new Error("Couldn't read this SBC's requirements from the Web App. Use the debug tools instead.");
@@ -89,11 +89,13 @@
 
     const club = X.normalizeClub(data);
     const inDrafts = P.cardsInOtherDrafts(challenge);
+    // Cards in your active squad stay there (EA lists them; drafts are handled above).
+    const inSquad = club.filter((p) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(p.id))) === true).map((p) => p.id);
     const opts = {
       protectMinRating: options.protectMinRating ?? 87,
       protectFavorites: options.protectFavorites !== false,
       protectIds: options.protectIds ?? [],
-      excludeIds: [...new Set([...placedEarlier, ...inDrafts, ...(options.excludeIds ?? [])])],
+      excludeIds: [...new Set([...placedEarlier, ...inDrafts, ...inSquad, ...(options.excludeIds ?? [])])],
     };
     const res = X.solve(club, sbc, opts);
     if (!res.feasible) {
@@ -136,7 +138,8 @@
       kind: 'squad',
       cards: res.squad.map((p) => ({ id: p.id, name: p.name, rating: p.rating, note: cardNote(p) })),
       summary: `Found ${res.squad.length} cards for "${sbc.name}" · ${numbers}.` +
-        (inDrafts.size ? ` Left out ${inDrafts.size} card(s) in other SBC drafts.` : ''),
+        (inDrafts.size ? ` Left out ${inDrafts.size} card(s) in other SBC drafts.` : '') +
+        (inSquad.length ? ` Kept ${inSquad.length} card(s) in your active squad.` : ''),
       apply,
     };
   }

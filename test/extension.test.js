@@ -115,6 +115,8 @@ function mockOpenSbc() {
     }),
   });
   window.services.SBC = {
+    // EA lists the active squad's cards; here, cards 5010-5040.
+    isItemInSquad: (id) => id >= 5010 && id <= 5040,
     saveChallenge() { window.__saved++; return { observe(_c, cb) { setTimeout(() => cb(this, { success: true }), 5); } }; },
     submitChallenge() { window.__submitted++; throw new Error('must never submit'); },
   };
@@ -317,6 +319,7 @@ test('one click: reads the SBC, solves with the club, places one squad, never su
 
     const placed = await page.evaluate(() => window.__placed);
     assert.equal(placed.filter(Boolean).length, 11);
+    assert.ok(placed.every((id) => id < 5010 || id > 5040), 'active-squad cards are kept');
     assert.equal(await page.evaluate(() => window.__saved), 1);
     assert.equal(await page.evaluate(() => window.__submitted), 0);
     // Club read once (storage + 2 pages); pre-fill found everything in that read.
@@ -401,12 +404,13 @@ function mockWorkArea() {
       else this._fetchBatch(() => this._ensureItemsForPage(page, cb));
     },
     _currentState: () => state,
-    _tabStates: new Map([['club', state]]), _activeTab: 'club',
+    // As on the real Web App: every tab has a state from the start, empty until it is opened.
+    _tabStates: new Map([['club', state], ['storage', { items: [], serverOffset: 0, retrievedAll: false, currentPage: 0 }]]), _activeTab: 'club',
     getActiveTab() { return this._activeTab; },
     // Tapping the SBC Storage tab: one read of the storage cards for this challenge.
     setActiveTab(tab, cb) {
       this._activeTab = tab;
-      if (tab === 'storage' && !this._tabStates.has('storage')) {
+      if (tab === 'storage' && !this._tabStates.get('storage').retrievedAll) {
         window.__storageTabLoads++;
         this._tabStates.set('storage', { items: window.__storage, retrievedAll: true });
         window.__storage.forEach((e) => { e.sbsScore = 300; this._itemEntityMap.set(e.id, e); this._itemScoreMap.set(e.id, 300); });
