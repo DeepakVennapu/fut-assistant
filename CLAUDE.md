@@ -58,14 +58,39 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
 
 ## Status
 
-- Merged to `main` (PR #1). 18 tests pass (`npm test`). The Playwright tests run the extension
-  against a **mock** of the Web App.
-- **Not yet tried on EA's real Web App.** The Web App's internals are undocumented, so these are
-  guesses that may need fixing on first real use:
-  - finding the open SBC (`findOpenChallenge`);
-  - item fields (`toCard`): positions, rarity, untradeable, base id;
-  - league, nation and club name lookups (they fall back to ids);
-  - requirement key names; quality values 1/2/3 and rarity group 4 = "Rare" are guesses.
+- 22 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
+  `npx playwright install chromium`, otherwise they skip). They run the extension against a
+  **mock** of the Web App whose shapes now follow what the real FC 27 Web App returns.
+- **Tested on EA's real FC 27 Web App on 2026-11-16** (branch `fix/real-webapp-testing`):
+  - Panel loads (bottom-left, right of EA's 96px nav so it doesn't cover Store/Club).
+  - Club export: 77 club + 2 storage cards, matching EA's "Players: 77 items" and SBC Storage.
+    Names, ratings, positions (numeric ids 0=GK … 27=LW), nation/league/club names,
+    untradeable (`tradable`), `_rareflag` (0, 3, 87) all checked against the screen.
+  - Requirements: read correctly on 3 squad SBCs (league/nation counts, same-league/nation/club,
+    CLUB_ID with two clubs, PLAYER_QUALITY per player, PLAYER_LEVEL count, chemistry). Key names
+    match `SBCEligibilityKey`; scope is GREATER=0/LOWER=1/EXACT=2. Quality 1/2/3 =
+    bronze/silver/gold is confirmed (EA's `ItemRatingTier`).
+  - Solve & pre-fill on "Red Bull Wiiings Challenge" (f433): EA showed 6/6 requirements, rating
+    81, chemistry 14/33, the same as the status line. No 87+ or special cards used. Not submitted.
+  - Refuses correctly when the club can't do it ("3 Leagues & 2 Nations").
+- **What FC 27 looks like inside** (found read-only):
+  - Open SBC: `getCurrentController().childViewControllers[0].viewModel._challenge`;
+    squad SBCs are `type: "OPEN_CHALLENGE"` with `formation` like `"f433"`.
+  - Slots: `squad.getFieldPlayers()[i].position` = `{ id, typeId, name: 'RCB', typeName: 'CB' }`.
+  - EA's own local checks: `challenge.meetsRequirements()`, `isRequirementMet(req)`,
+    `squad.getChemistry()`, `squad.getRating()`. One-click reports these after filling.
+  - Names: `global.leagueFull.<season>.league<id>`, `global.teamabbr15.<season>.team<id>`
+    (season e.g. 2027), `search.nationName.nation<id>`; missing keys localize to `*key`.
+  - Club search can return fewer cards than asked for while more remain; storage is
+    `services.Item.searchStorageItems(criteria)`.
+- **Still unverified:**
+  - Brick SBCs (fewer than 11 spots): none were available to test.
+  - PLAYER_RARITY_GROUP 4 = "Rare" (still shown as "⚠ double-check").
+  - Loan skipping (the test club had no loans).
+  - "Points" SBCs (`ONE_CLICK_CHALLENGE`: pick cards worth a score, `squad: null`) are not
+    supported; the panel says so. Their requirement keys differ (OVR Min 45 is `{40:[45],41:[1]}`).
+- The solver uses cheap fodder out of position when the chemistry requirement allows it
+  (e.g. a spare GK at RB). EA accepts this; it's a known behaviour, not a bug.
 - When the owner reports a problem, ask for the **Copy SBC requirements** output (under More tools)
   and the exported club file's `meta.sampleKeys`.
 
