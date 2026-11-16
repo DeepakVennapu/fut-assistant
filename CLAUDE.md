@@ -58,7 +58,7 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
 
 ## Status
 
-- Merged to `main` (PR #1). 18 tests pass (`npm test`). The Playwright tests run the extension
+- Merged to `main` (PR #1 code, PR #2 this file). 18 tests pass (`npm test`). The Playwright tests run the extension
   against a **mock** of the Web App.
 - **Not yet tried on EA's real Web App.** The Web App's internals are undocumented, so these are
   guesses that may need fixing on first real use:
@@ -68,6 +68,25 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - requirement key names; quality values 1/2/3 and rarity group 4 = "Rare" are guesses.
 - When the owner reports a problem, ask for the **Copy SBC requirements** output (under More tools)
   and the exported club file's `meta.sampleKeys`.
+
+## Next step: test on the real Web App
+
+This must run on the owner's own Mac, in their own Chrome, signed in by them. Don't do it from a
+cloud session: EA is blocked there, and a data-centre login is a needless account risk. The owner
+logs in; never handle their EA credentials. Never submit. Inspect EA internals read-only.
+
+1. Load `extension/` unpacked. Check that the panel appears in the bottom-left of the Web App.
+2. More tools → Export club. Check names, ratings, positions, nation/league/club names,
+   rare/special, untradeable, storage, and that loans are skipped. Look at `meta.sampleKeys`.
+3. Open a simple SBC, then a league/nation hybrid. More tools → Copy SBC requirements. Compare each
+   requirement with what EA shows.
+4. Solve & pre-fill. Check that cards appear and that EA's rating/chemistry match the status line;
+   check positions and that no protected cards were used. The owner reviews and submits.
+5. Repeat on an SBC with fewer than 11 players (locked "brick" spots).
+
+Fix on a branch. Update the mock in `test/extension.test.js` to the real object shapes found. Run
+`npm run build` if `src/` changed, then `npm test`. Record what's now verified under "Status", and
+open a PR. Don't merge without the owner's OK.
 
 ## Ideas not started
 
