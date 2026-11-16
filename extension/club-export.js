@@ -267,7 +267,8 @@
     if (document.getElementById('fut-assistant-export')) return;
     const host = document.createElement('div');
     host.id = 'fut-assistant-export';
-    host.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;';
+    // Sits just right of the Web App's 96px left nav so it never covers Store/Club.
+    host.style.cssText = 'position:fixed;left:108px;bottom:12px;z-index:2147483647;';
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `
       <style>
