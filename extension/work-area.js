@@ -133,7 +133,8 @@
     const eaScore = Number(H.tryCall(() => vm.getSelectedScore()));
     const eaCount = Number(H.tryCall(() => vm.getSelectedCount()));
     const agrees = eaScore === sel.score && eaCount === sel.cards.length;
-    const check = (window.__futAssistantSbc?.screenText?.() ?? []).filter(Boolean);
+    // Requirement lines only ("OVR Min: 45"); the same list on screen also holds the reward card.
+    const check = (window.__futAssistantSbc?.screenText?.() ?? []).filter((t) => t && !t.includes('\n') && t.includes(':'));
     const left = remaining - (Number.isFinite(eaScore) ? eaScore : sel.score);
     return {
       cards: sel.cards,

@@ -54,11 +54,12 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - `prefill.js`: finds the open SBC, places cards, saves the draft once, enforces the 30 s wait.
   - `sbc-reader.js`: maps EA's requirement data to the solver's format, using the Web App's
     `SBCEligibilityKey` and `SBCEligibilityScope` tables at runtime.
+  - `work-area.js`: points SBCs. Selects cards in the Work Area like a tap; never reviews or submits.
   - `one-click.js`: **Solve & pre-fill**. Reads the SBC, uses the cached club, solves, fills.
 
 ## Status
 
-- 22 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
+- 27 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
   `npx playwright install chromium`, otherwise they skip). They run the extension against a
   **mock** of the Web App whose shapes now follow what the real FC 27 Web App returns.
 - **Tested on EA's real FC 27 Web App on 2026-11-16** (branch `fix/real-webapp-testing`):
@@ -87,8 +88,21 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - Brick SBCs (fewer than 11 spots): none were available to test.
   - PLAYER_RARITY_GROUP 4 = "Rare" (still shown as "⚠ double-check").
   - Loan skipping (the test club had no loans).
-  - "Points" SBCs (`ONE_CLICK_CHALLENGE`: pick cards worth a score, `squad: null`) are not
-    supported; the panel says so. Their requirement keys differ (OVR Min 45 is `{40:[45],41:[1]}`).
+  - Points SBCs: the SBC Storage tab's cards aren't considered (only the Club tab's are loaded),
+    and cards sitting in another SBC's saved draft can be selected. Their requirement keys
+    differ from squad SBCs (OVR Min 45 is `{40:[45],41:[1]}`) and aren't mapped; EA's own
+    `isItemSelectable` is used instead.
+- **Points SBCs (Work Area, `ONE_CLICK_CHALLENGE`, `squad: null`) are supported** by
+  `extension/work-area.js` + `src/points.js`, tested live on "Premier League POTM October":
+  30 cards selected, 12,480 points, EA's bar showed the same; Review Selection not pressed.
+  - View model: `childViewControllers[i].viewModel` with `_challenge`, `_itemEntityMap`,
+    `_itemScoreMap` (= each card's `sbsScore`), `_selectedItemIds`, `getSelectionLimit()` (30).
+  - A tap is `vm.toggleSelection(item)` + `view.setItemSelected(item, true)` +
+    `workAreaController._refreshSelectionControls()`, all local. EA loads the club in batches
+    (61, then 31) via `_ensureItemsForPage`.
+  - Card choice is cheapest per point using the placeholder prices, which favours higher-rated
+    cards below the protect rating (it picked an 85 and an 84). Lower "Keep cards rated" to
+    hold those back. Real prices would improve this.
 - The solver uses cheap fodder out of position when the chemistry requirement allows it
   (e.g. a spare GK at RB). EA accepts this; it's a known behaviour, not a bug.
 - When the owner reports a problem, ask for the **Copy SBC requirements** output (under More tools)

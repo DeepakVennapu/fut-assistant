@@ -414,6 +414,9 @@ function mockWorkArea() {
     getCurrentViewController: () => ({ getCurrentController: () => ctl }) }) }) });
   // Cards 5000-5003 are in the active squad; EA's Review would warn about them.
   window.services.SBC = { isItemInSquad: (id) => id >= 5000 && id <= 5003 };
+  // As on the real page: the requirement and the reward card sit in the same kind of list.
+  document.body.insertAdjacentHTML('beforeend',
+    '<ul class="sbc-requirements"><li>OVR Min: 45</li><li>85\nST\nx1 POTM Premier League Jackson (Untradeable)</li></ul>');
   window.__vm = vm;
   window.__view = view;
 }
@@ -437,6 +440,7 @@ test('one click on a points SBC: selects cheap cards like a tap, never reviews o
     assert.match(text, /✔ EA shows [\d,]+ points selected\./);
     assert.match(text, /more needed after this; submit it, then click again for the next batch/);
     assert.match(text, /Press Review Selection and submit it yourself/);
+    assert.match(text, /⚠ Check yourself: OVR Min: 45\. Press/); // reward text is left out
 
     const r = await page.evaluate(() => ({
       ids: [...window.__vm._selectedItemIds],
