@@ -17,6 +17,7 @@ const prefillScript = fileURLToPath(new URL('../extension/prefill.js', import.me
 const bundleScript = fileURLToPath(new URL('../extension/solver-bundle.js', import.meta.url));
 const oneClickScript = fileURLToPath(new URL('../extension/one-click.js', import.meta.url));
 const readerScript = fileURLToPath(new URL('../extension/sbc-reader.js', import.meta.url));
+const workAreaScript = fileURLToPath(new URL('../extension/work-area.js', import.meta.url));
 
 // Builds a fake Web App: 120 club players over two pages, 3 storage cards, one loan, one Icon.
 function mockWebApp() {
@@ -201,7 +202,7 @@ test('a points SBC (no squad) is named clearly instead of "no open SBC"', { skip
     await page.addScriptTag({ content: readFileSync(script, 'utf8') });
     await page.addScriptTag({ content: readFileSync(prefillScript, 'utf8') });
     const msg = await page.evaluate(() => { try { window.__futAssistantPrefill.findOpenChallenge(); return 'found'; } catch (e) { return e.message; } });
-    assert.match(msg, /"Premier League POTM October" is a points SBC \(pick cards worth 17,000 points\), not a squad/);
+    assert.match(msg, /"Premier League POTM October" is a points SBC \(pick cards worth 17,000 points\), not a squad\. Use Solve & pre-fill to select cards for it/);
   } finally {
     await browser.close();
   }
@@ -284,7 +285,7 @@ async function loadAll(page, { requirements = true } = {}) {
   await page.evaluate(mockWebApp);
   await page.evaluate(mockOpenSbc);
   if (requirements) await page.evaluate(mockRequirements);
-  for (const f of [bundleScript, script, prefillScript, readerScript, oneClickScript]) {
+  for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
     await page.addScriptTag({ content: readFileSync(f, 'utf8') });
   }
 }
@@ -358,6 +359,128 @@ test('pre-fill puts each card in the slot the solver scored it in', { skip: !chr
     });
     // Without the solver's slots, plain matching would put A in a CM slot and leave D out of position.
     assert.deepEqual(order, ['A', 'B', 'C', 'D']);
+  } finally {
+    await browser.close();
+  }
+});
+
+// FC 27 points SBC ("Work Area"), shaped like the real one: the view model holds the
+// challenge, a Map of loaded cards, EA's score map and the selection; EA loads the club in
+// batches (61, then 31) and a tap is toggleSelection + view.setItemSelected + refresh.
+function mockWorkArea() {
+  window.__fetches = 0;
+  window.__reviewed = 0;
+  window.__refreshed = 0;
+  const club = window.__club.map((c, i) => ({ ...c, sbsScore: 100 + (i % 4) * 80 }));
+  const challenge = { id: 212, name: 'Premier League POTM October', type: 'ONE_CLICK_CHALLENGE', squad: null,
+    scoreRequirement: 17000, submittedScore: 0, eligibilityRequirements: [] };
+  const state = { items: [], serverOffset: 0, retrievedAll: false, currentPage: 0 };
+  const vm = {
+    _challenge: challenge, _pageSize: 30, _itemEntityMap: new Map(), _itemScoreMap: new Map(), _selectedItemIds: new Set(),
+    _fetchBatch(done) {
+      window.__fetches++;
+      const n = state.serverOffset === 0 ? 61 : 31;
+      const batch = club.slice(state.serverOffset, state.serverOffset + n);
+      batch.forEach((e) => { this._itemEntityMap.set(e.id, e); this._itemScoreMap.set(e.id, e.sbsScore); state.items.push(e); });
+      state.serverOffset += batch.length;
+      state.retrievedAll = batch.length < n;
+      setTimeout(done, 5);
+    },
+    _ensureItemsForPage(page, cb) {
+      if (state.items.length > (page + 1) * this._pageSize + 1 || state.retrievedAll) cb();
+      else this._fetchBatch(() => this._ensureItemsForPage(page, cb));
+    },
+    _currentState: () => state,
+    getChallenge() { return challenge; },
+    getSelectionLimit: () => 30,
+    isSelectionLimitReached() { return this._selectedItemIds.size >= 30; },
+    isItemSelectable: (e) => e.sbsScore > 0,
+    isItemSelected(e) { return this._selectedItemIds.has(e.id); },
+    toggleSelection(e) {
+      if (this._selectedItemIds.has(e.id)) { this._selectedItemIds.delete(e.id); return false; }
+      if (this.isSelectionLimitReached()) return false;
+      this._selectedItemIds.add(e.id);
+      return true;
+    },
+    getSelectedCount() { return this._selectedItemIds.size; },
+    getSelectedScore() { let t = 0; this._selectedItemIds.forEach((id) => { t += this._itemScoreMap.get(id) ?? 0; }); return t; },
+  };
+  vm._fetchBatch(() => {}); // the Web App loads the first 61 cards when the SBC opens
+  const view = { selected: new Set(), setItemSelected(e, on) { if (on) this.selected.add(e.id); } };
+  const workAreaController = { viewModel: vm, getView: () => view, _refreshSelectionControls() { window.__refreshed++; } };
+  const ctl = { childViewControllers: [{ viewModel: vm }], workAreaController,
+    reviewSelection() { window.__reviewed++; throw new Error('must never review/submit'); } };
+  window.getAppMain = () => ({ getRootViewController: () => ({ getPresentedViewController: () => ({
+    getCurrentViewController: () => ({ getCurrentController: () => ctl }) }) }) });
+  // Cards 5000-5003 are in the active squad; EA's Review would warn about them.
+  window.services.SBC = { isItemInSquad: (id) => id >= 5000 && id <= 5003 };
+  window.__vm = vm;
+  window.__view = view;
+}
+
+test('one click on a points SBC: selects cheap cards like a tap, never reviews or submits', { skip: !chromium && 'playwright not installed', timeout: 90000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><html><body></body></html>');
+    await page.evaluate(mockWebApp);
+    await page.evaluate(mockWorkArea);
+    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
+      await page.addScriptTag({ content: readFileSync(f, 'utf8') });
+    }
+    await page.evaluate(() => { window.__futAssistantExport.pause = () => Promise.resolve(); });
+    const status = page.locator('#fut-assistant-export #oneClickStatus');
+    await page.locator('#fut-assistant-export #oneClick').click();
+    await status.filter({ hasText: /Selected|Stopped/ }).waitFor({ timeout: 60000 });
+    const text = await status.textContent();
+    assert.match(text, /^Selected 30 card\(s\) · [\d,]+ points for "Premier League POTM October"/);
+    assert.match(text, /✔ EA shows [\d,]+ points selected\./);
+    assert.match(text, /more needed after this; submit it, then click again for the next batch/);
+    assert.match(text, /Press Review Selection and submit it yourself/);
+
+    const r = await page.evaluate(() => ({
+      ids: [...window.__vm._selectedItemIds],
+      shown: [...window.__view.selected],
+      fetches: window.__fetches,
+      refreshed: window.__refreshed,
+      reviewed: window.__reviewed,
+      ratings: [...window.__vm._selectedItemIds].map((id) => window.__vm._itemEntityMap.get(id).rating),
+    }));
+    assert.equal(r.ids.length, 30);
+    assert.deepEqual(r.shown.sort(), r.ids.sort()); // the view shows what was selected
+    assert.ok(r.ids.every((id) => id < 5000 || id > 5003), 'active-squad cards are skipped');
+    assert.ok(r.ratings.every((x) => x < 87), 'protected cards are kept');
+    assert.ok(r.ids.every((id) => id !== 5200), 'loan cards are skipped');
+    assert.equal(r.refreshed, 1);
+    assert.equal(r.reviewed, 0);
+    // 61 loaded on open, then one extra batch of 31 per paced step until the club is all in.
+    assert.equal(r.fetches, 3);
+
+    // A second click straight away: blocked by the shared 30 s wait, selection unchanged.
+    await page.locator('#fut-assistant-export #oneClick').click();
+    await status.filter({ hasText: /Please wait/ }).waitFor({ timeout: 5000 });
+    assert.equal(await page.evaluate(() => window.__vm._selectedItemIds.size), 30);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('one click on a points SBC: leaves a selection you made alone', { skip: !chromium && 'playwright not installed', timeout: 60000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><html><body></body></html>');
+    await page.evaluate(mockWebApp);
+    await page.evaluate(mockWorkArea);
+    await page.evaluate(() => window.__vm._selectedItemIds.add(5010));
+    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
+      await page.addScriptTag({ content: readFileSync(f, 'utf8') });
+    }
+    const status = page.locator('#fut-assistant-export #oneClickStatus');
+    await page.locator('#fut-assistant-export #oneClick').click();
+    await status.filter({ hasText: /Selected|Stopped/ }).waitFor({ timeout: 30000 });
+    assert.match(await status.textContent(), /Stopped: Some cards are already selected\. Deselect them first/);
+    assert.deepEqual(await page.evaluate(() => [...window.__vm._selectedItemIds]), [5010]);
   } finally {
     await browser.close();
   }

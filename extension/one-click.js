@@ -55,6 +55,14 @@
     const wait = P.cooldownLeft();
     if (wait > 0) throw new Error(`Please wait ${Math.ceil(wait / 1000)}s before the next pre-fill.`);
 
+    // FC 27 points SBCs (Work Area: pick cards worth N points) instead of a squad.
+    const workArea = window.__futAssistantWorkArea?.find();
+    if (workArea) {
+      const res = await window.__futAssistantWorkArea.selectAndFill(workArea, options, onStatus, [...placedEarlier]);
+      res.cards.forEach((c) => placedEarlier.add(c.id));
+      return res.message;
+    }
+
     const read = S.readOpenSbc();
     const { sbc } = read;
     if (!read.enumsFound) throw new Error("Couldn't read this SBC's requirements from the Web App. Use More tools instead.");

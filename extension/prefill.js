@@ -80,7 +80,7 @@
       const points = searchTree(current ?? root, 6, looksLikePointsChallenge)[0];
       if (points) {
         throw new Error(`"${points.name ?? 'This SBC'}" is a points SBC (pick cards worth ${Number(points.scoreRequirement)
-          .toLocaleString()} points), not a squad. FUT Assistant only fills squad SBCs.`);
+          .toLocaleString()} points), not a squad. Use Solve & pre-fill to select cards for it.`);
       }
       throw new Error('No open SBC found. Open the SBC so you can see its squad, then try again.');
     }
@@ -206,5 +206,10 @@
     };
   }
 
-  window.__futAssistantPrefill = { run, parseCode, placeCards, findOpenChallenge, eaCheck, cooldownLeft, COOLDOWN_MS };
+  // The 30 s wait is shared with points-SBC selections (work-area.js).
+  const markFilled = () => { lastFill = Date.now(); };
+
+  window.__futAssistantPrefill = {
+    run, parseCode, placeCards, findOpenChallenge, searchTree, eaCheck, cooldownLeft, markFilled, COOLDOWN_MS,
+  };
 })();

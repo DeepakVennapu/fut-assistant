@@ -6,6 +6,7 @@ import { evaluate } from '../src/requirements.js';
 import { normalizePlayer } from '../src/model.js';
 import { solve } from '../src/solver.js';
 import { analyzeRepeat } from '../src/analyze.js';
+import { selectForScore } from '../src/points.js';
 
 let nextId = 1;
 const card = (o) => normalizePlayer({
@@ -120,4 +121,42 @@ test('chemistry: matches EA on a real squad placed in the SBC\'s own slots', () 
   const c = chemistryFor(squad, F433);
   assert.deepEqual(c.perPlayer.map((p) => p.chem), real.map((r) => r[5]));
   assert.equal(c.total, 10);
+});
+
+// Points SBCs (FC 27 Work Area). Scores are EA's sbsScore values seen on the real Web App.
+test('points: cheapest fodder first, best cards kept, stops at the target', () => {
+  const c = (id, o) => normalizePlayer({ id, rating: 82, positions: ['CM'], price: 900, ...o });
+  const pool = [
+    c('dup', { duplicate: true, untradeable: true }),
+    c('untr', { untradeable: true }),
+    c('trade', {}),
+    c('star', { rating: 88, untradeable: true }),
+    c('promo', { special: true, untradeable: true }),
+  ];
+  const scores = { dup: 340, untr: 280, trade: 410, star: 900, promo: 500 };
+  const res = selectForScore(pool, scores, { target: 600, limit: 30 });
+  assert.deepEqual(res.cards.map((p) => p.id), ['dup', 'untr']);
+  assert.equal(res.score, 620);
+  assert.equal(res.reached, true);
+  assert.equal(res.candidates, 3); // 88-rated and special cards are protected
+});
+
+test('points: respects the card limit and reports a partial batch', () => {
+  const pool = Array.from({ length: 40 }, (_, i) => normalizePlayer({ id: `p${i}`, rating: 80, positions: ['ST'], untradeable: true }));
+  const scores = Object.fromEntries(pool.map((p) => [p.id, 180]));
+  const res = selectForScore(pool, scores, { target: 17000, limit: 30 });
+  assert.equal(res.cards.length, 30);
+  assert.equal(res.score, 5400);
+  assert.equal(res.reached, false);
+});
+
+test('points: drops cards the target does not need', () => {
+  const pool = [
+    normalizePlayer({ id: 'a', rating: 75, positions: ['ST'], untradeable: true, price: 100 }),
+    normalizePlayer({ id: 'b', rating: 83, positions: ['ST'], untradeable: true, price: 1200 }),
+  ];
+  // Per point, a (100/90) is cheaper than b (1200/410), so a goes in first; b alone covers 300.
+  const res = selectForScore(pool, { a: 90, b: 410 }, { target: 300 });
+  assert.deepEqual(res.cards.map((p) => p.id), ['b']);
+  assert.equal(res.score, 410);
 });

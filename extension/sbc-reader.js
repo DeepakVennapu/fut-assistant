@@ -161,5 +161,5 @@
     };
   }
 
-  window.__futAssistantSbc = { readOpenSbc, mapPair, kvEntries };
+  window.__futAssistantSbc = { readOpenSbc, mapPair, kvEntries, screenText };
 })();
