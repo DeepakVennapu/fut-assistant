@@ -135,15 +135,6 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
     first live run; it now uses EA's values and shows the cards before selecting.
 - The solver uses cheap fodder out of position when the chemistry requirement allows it
   (e.g. a spare GK at RB). EA accepts this; it's a known behaviour, not a bug.
-||||||| 5c09935
-- Merged to `main` (PR #1). 18 tests pass (`npm test`). The Playwright tests run the extension
-  against a **mock** of the Web App.
-- **Not yet tried on EA's real Web App.** The Web App's internals are undocumented, so these are
-  guesses that may need fixing on first real use:
-  - finding the open SBC (`findOpenChallenge`);
-  - item fields (`toCard`): positions, rarity, untradeable, base id;
-  - league, nation and club name lookups (they fall back to ids);
-  - requirement key names; quality values 1/2/3 and rarity group 4 = "Rare" are guesses.
 - When the owner reports a problem, ask for the **Copy SBC requirements** output (under Troubleshooting tools)
   and the exported club file's `meta.sampleKeys`.
 
