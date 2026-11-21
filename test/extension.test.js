@@ -16,6 +16,7 @@ const script = fileURLToPath(new URL('../extension/club-export.js', import.meta.
 const prefillScript = fileURLToPath(new URL('../extension/prefill.js', import.meta.url));
 const bundleScript = fileURLToPath(new URL('../extension/solver-bundle.js', import.meta.url));
 const oneClickScript = fileURLToPath(new URL('../extension/one-click.js', import.meta.url));
+const panelScript = fileURLToPath(new URL('../extension/panel.js', import.meta.url));
 const readerScript = fileURLToPath(new URL('../extension/sbc-reader.js', import.meta.url));
 const workAreaScript = fileURLToPath(new URL('../extension/work-area.js', import.meta.url));
 
@@ -55,10 +56,11 @@ test('extension exports a club the solver can use, using read calls only', { ski
     await page.setContent('<!doctype html><html><body><p>Mock Web App</p></body></html>');
     await page.evaluate(mockWebApp);
     await page.addScriptTag({ content: readFileSync(script, 'utf8') });
+    await page.addScriptTag({ content: readFileSync(panelScript, 'utf8') });
 
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 30000 }),
-      page.locator('#fut-assistant-export summary').click().then(() => page.locator('#fut-assistant-export #export').click()),
+      page.locator('#fut-assistant-export #advanced summary').click().then(() => page.locator('#fut-assistant-export #export').click()),
     ]);
     const data = JSON.parse(readFileSync(await download.path(), 'utf8'));
     const calls = await page.evaluate(() => window.__calls);
@@ -131,6 +133,7 @@ test('pre-fill places the chosen cards in position, saves the draft, never submi
     await page.evaluate(mockOpenSbc);
     await page.addScriptTag({ content: readFileSync(script, 'utf8') });
     await page.addScriptTag({ content: readFileSync(prefillScript, 'utf8') });
+    await page.addScriptTag({ content: readFileSync(panelScript, 'utf8') });
 
     // Cards 5000.. have preferred positions in slot order GK,RB,CB,LB,CM,CAM,ST,RM,LM,RW,LW (by i % 11).
     // Give them out of order, plus one card to buy, and expect a sensible placement.
@@ -138,7 +141,7 @@ test('pre-fill places the chosen cards in position, saves the draft, never submi
     const code = JSON.stringify({ kind: 'fut-assistant-prefill', v: 1, sbc: 'Test',
       cards: [...ids.map((id) => ({ id: String(id), name: `P${id}` })), { buy: true, name: 'Any 84 gold (buy)', rating: 84 }] });
 
-    await page.locator('#fut-assistant-export summary').click();
+    await page.locator('#fut-assistant-export #advanced summary').click();
     await page.locator('#fut-assistant-export #code').fill(code);
     await page.locator('#fut-assistant-export #prefill').click();
     const status = page.locator('#fut-assistant-export #prefillStatus');
@@ -242,7 +245,7 @@ test('reads the open SBC requirements and the solver can use them', { skip: !chr
     await page.evaluate(mockWebApp);
     await page.evaluate(mockOpenSbc);
     await page.evaluate(mockRequirements);
-    for (const f of [script, prefillScript, readerScript]) await page.addScriptTag({ content: readFileSync(f, 'utf8') });
+    for (const f of [script, prefillScript, readerScript, panelScript]) await page.addScriptTag({ content: readFileSync(f, 'utf8') });
 
     const data = await page.evaluate(() => window.__futAssistantSbc.readOpenSbc());
     const { sbc } = data;
@@ -267,7 +270,7 @@ test('reads the open SBC requirements and the solver can use them', { skip: !chr
     ]);
 
     // The panel button reports what it copied.
-    await page.locator('#fut-assistant-export summary').click();
+    await page.locator('#fut-assistant-export #advanced summary').click();
     await page.locator('#fut-assistant-export #readSbc').click();
     await page.locator('#fut-assistant-export #readStatus').filter({ hasText: /Copied|Stopped/ }).waitFor();
     assert.match(await page.locator('#fut-assistant-export #readStatus').textContent(),
@@ -282,16 +285,33 @@ test('reads the open SBC requirements and the solver can use them', { skip: !chr
   }
 });
 
-// Press Solve & pre-fill; when the preview appears, press "Fill these"; wait for the outcome.
-async function solveAndApply(page, done = /Placed|Selected|Stopped/) {
-  const status = page.locator('#fut-assistant-export #oneClickStatus');
-  await page.locator('#fut-assistant-export #oneClick').click();
-  await status.filter({ hasText: /^Found|Stopped/ }).waitFor({ timeout: 60000 });
-  if ((await status.textContent()).startsWith('Found')) {
+// The panel: its result area says what it is showing (idle, plan, outcome or notice).
+const panelState = (page) => page.evaluate(() =>
+  document.getElementById('fut-assistant-export')?.shadowRoot.getElementById('result')?.dataset.state);
+const waitState = (page, states, timeout = 60000) => page.waitForFunction((st) =>
+  st.includes(document.getElementById('fut-assistant-export')?.shadowRoot.getElementById('result')?.dataset.state), states, { timeout });
+const resultText = (page) => page.locator('#fut-assistant-export #result').textContent();
+const mainButton = (page) => page.evaluate(() => {
+  const b = document.getElementById('fut-assistant-export').shadowRoot.getElementById('find');
+  return { label: b.textContent, disabled: b.disabled };
+});
+const contextText = (page) => page.locator('#fut-assistant-export #context').textContent();
+
+// Press "Find cards" once it's enabled; returns the state it lands in (plan or notice).
+async function findCards(page) {
+  await page.waitForFunction(() => !document.getElementById('fut-assistant-export').shadowRoot.getElementById('find').disabled, null, { timeout: 10000 });
+  await page.locator('#fut-assistant-export #find').click();
+  await waitState(page, ['plan', 'notice']);
+  return panelState(page);
+}
+
+// Find cards; when the preview appears, press the place/select button; return what it says.
+async function solveAndApply(page) {
+  if ((await findCards(page)) === 'plan') {
     await page.locator('#fut-assistant-export #applyPlan').click();
-    await status.filter({ hasText: done }).waitFor({ timeout: 60000 });
+    await waitState(page, ['outcome', 'notice']);
   }
-  return status.textContent();
+  return resultText(page);
 }
 
 async function loadAll(page, { requirements = true } = {}) {
@@ -299,7 +319,7 @@ async function loadAll(page, { requirements = true } = {}) {
   await page.evaluate(mockWebApp);
   await page.evaluate(mockOpenSbc);
   if (requirements) await page.evaluate(mockRequirements);
-  for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
+  for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript, panelScript]) {
     await page.addScriptTag({ content: readFileSync(f, 'utf8') });
   }
 }
@@ -309,13 +329,13 @@ test('one click: reads the SBC, solves with the club, places one squad, never su
   try {
     const page = await browser.newPage();
     await loadAll(page);
-    const status = page.locator('#fut-assistant-export #oneClickStatus');
-    await solveAndApply(page);
-    const text = await status.textContent();
-    assert.match(text, /^Placed 11 cards · rating \d+ · chemistry \d+/);
-    assert.match(text, /⚠ Check yourself: .*Not understood: FIRST_OWNER_PLAYERS_COUNT/);
-    assert.match(text, /submit it yourself/);
-    assert.match(text, /✔ EA shows rating 82 · chemistry 21, requirements met\./);
+    assert.match(await contextText(page), /Test Hybrid.*Squad SBC/);
+    assert.deepEqual(await mainButton(page), { label: 'Find cards for this squad', disabled: false });
+    const text = await solveAndApply(page);
+    assert.match(text, /✔ Placed 11 cards/);
+    assert.match(text, /EA confirms: requirements met, rating 82, chemistry 21\./);
+    assert.match(text, /Check yourself: .*Not understood: FIRST_OWNER_PLAYERS_COUNT/);
+    assert.match(text, /Next: In EA: check the squad, then Submit\./);
 
     const placed = await page.evaluate(() => window.__placed);
     assert.equal(placed.filter(Boolean).length, 11);
@@ -325,9 +345,9 @@ test('one click: reads the SBC, solves with the club, places one squad, never su
     // Club read once (storage + 2 pages); pre-fill found everything in that read.
     assert.deepEqual(await page.evaluate(() => window.__calls), ['storage:100', 'search:0', 'search:77', 'search:122']);
 
-    // Straight away again: blocked by the 30 s wait, before any reading or solving.
-    await page.locator('#fut-assistant-export #oneClick').click();
-    await status.filter({ hasText: /Please wait/ }).waitFor({ timeout: 5000 });
+    // Straight away again: the button counts down the 30 s wait instead.
+    await page.waitForFunction(() => /^Wait \d+ s$/.test(document.getElementById('fut-assistant-export').shadowRoot.getElementById('find').textContent));
+    assert.equal((await mainButton(page)).disabled, true);
     assert.equal(await page.evaluate(() => window.__saved), 1);
   } finally {
     await browser.close();
@@ -344,10 +364,11 @@ test('one click: says so loudly when EA disagrees with the solver', { skip: !chr
     await page.evaluate(() => document.querySelectorAll('.sbc-requirements').forEach((n) => n.remove()));
     await page.evaluate(() => document.body.insertAdjacentHTML('beforeend',
       '<ul class="sbc-requirements"><li>Players: Exactly 11</li><li>Team Rating: Min. 80</li></ul>'));
-    const status = page.locator('#fut-assistant-export #oneClickStatus');
-    await solveAndApply(page);
-    assert.match(await status.textContent(),
-      /✖ EA shows rating 81 · chemistry 10, and says NOT met: Team Rating: Min\. 80\. Don't submit; clear the squad\./);
+    const text = await solveAndApply(page);
+    assert.match(text, /✖ EA says the requirements are NOT met/);
+    assert.match(text, /EA shows rating 81, chemistry 10\./);
+    assert.match(text, /✖ Team Rating: Min\. 80/);
+    assert.match(text, /Next: Don't submit\. In EA: Clear Squad\./);
     assert.equal(await page.evaluate(() => window.__submitted), 0);
   } finally {
     await browser.close();
@@ -454,18 +475,24 @@ test('one click on a points SBC: selects cheap cards like a tap, never reviews o
     await page.setContent('<!doctype html><html><body></body></html>');
     await page.evaluate(mockWebApp);
     await page.evaluate(mockWorkArea);
-    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
+    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript, panelScript]) {
       await page.addScriptTag({ content: readFileSync(f, 'utf8') });
     }
     await page.evaluate(() => { window.__futAssistantExport.pause = () => Promise.resolve(); });
-    const status = page.locator('#fut-assistant-export #oneClickStatus');
-    await solveAndApply(page);
-    const text = await status.textContent();
-    assert.match(text, /^Selected 30 card\(s\) · [\d,]+ points for "Premier League POTM October"/);
-    assert.match(text, /✔ EA shows [\d,]+ points selected\./);
-    assert.match(text, /more needed after this; submit it, then click again for the next batch/);
-    assert.match(text, /Press Review Selection and submit it yourself/);
-    assert.match(text, /⚠ Check yourself: OVR Min: 45\. Press/); // reward text is left out
+    assert.match(await contextText(page), /Premier League POTM October.*Points SBC · 0 \/ 17,000 submitted/);
+    assert.equal(await findCards(page), 'plan');
+    const preview = await resultText(page);
+    assert.match(preview, /Target17,000/);
+    assert.match(preview, /✔ Your club can finish this: \d+ submissions, \d+ cards\./);
+    assert.match(await page.locator('#fut-assistant-export #applyPlan').textContent(), /^Select in Work Area$/);
+    await page.locator('#fut-assistant-export #applyPlan').click();
+    await waitState(page, ['outcome', 'notice']);
+    const text = await resultText(page);
+    assert.match(text, /✔ Selected 30 cards · [\d,]+ points/);
+    assert.match(text, /EA's progress bar agrees\./);
+    assert.match(text, /points still needed after this batch\./);
+    assert.match(text, /Check yourself: OVR Min: 45\./); // reward text is left out
+    assert.match(text, /Next: In EA: Review Selection → Confirm Submission\. Then come back for the next batch\./);
 
     const r = await page.evaluate(() => ({
       ids: [...window.__vm._selectedItemIds],
@@ -489,9 +516,9 @@ test('one click on a points SBC: selects cheap cards like a tap, never reviews o
     // 61 loaded on open, then one extra batch of 31 per paced step until the club is all in.
     assert.equal(r.fetches, 3);
 
-    // A second click straight away: blocked by the shared 30 s wait, selection unchanged.
-    await page.locator('#fut-assistant-export #oneClick').click();
-    await status.filter({ hasText: /Please wait/ }).waitFor({ timeout: 5000 });
+    // Now cards are selected: the panel says so and won't search over them.
+    await page.waitForFunction(() => /30 selected/.test(document.getElementById('fut-assistant-export').shadowRoot.getElementById('context').textContent));
+    assert.equal((await mainButton(page)).disabled, true);
     assert.equal(await page.evaluate(() => window.__vm._selectedItemIds.size), 30);
   } finally {
     await browser.close();
@@ -506,12 +533,16 @@ test('one click on a points SBC: leaves a selection you made alone', { skip: !ch
     await page.evaluate(mockWebApp);
     await page.evaluate(mockWorkArea);
     await page.evaluate(() => window.__vm._selectedItemIds.add(5010));
-    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
+    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript, panelScript]) {
       await page.addScriptTag({ content: readFileSync(f, 'utf8') });
     }
-    const status = page.locator('#fut-assistant-export #oneClickStatus');
-    await solveAndApply(page);
-    assert.match(await status.textContent(), /Stopped: Some cards are already selected\. Press Remove All first/);
+    await page.waitForFunction(() => /1 selected/.test(document.getElementById('fut-assistant-export').shadowRoot.getElementById('context').textContent));
+    assert.deepEqual(await mainButton(page), { label: 'Cards already selected', disabled: true });
+    // Even called directly, it refuses and says what to do.
+    const msg = await page.evaluate(async () => {
+      try { await window.__futAssistantOneClick.plan({}, () => {}); return 'planned'; } catch (e) { return `${e.title} | ${e.lines.join(' ')}`; }
+    });
+    assert.match(msg, /You already have 1 cards selected \| FUT Assistant won't change a selection you made\. Press Remove All/);
     assert.deepEqual(await page.evaluate(() => [...window.__vm._selectedItemIds]), [5010]);
   } finally {
     await browser.close();
@@ -528,9 +559,9 @@ test('one click: refuses to fill when the club cannot meet the SBC', { skip: !ch
         .getCurrentViewController().getCurrentController()._view.deep.holder.challenge;
       c.eligibilityRequirements = [{ scope: 0, count: -1, kvPairs: { _collection: { 2: [95] } } }];
     });
-    const status = page.locator('#fut-assistant-export #oneClickStatus');
-    await solveAndApply(page);
-    assert.match(await status.textContent(), /Stopped: Can't complete this with your club\. Team rating: Min 95 \(best: \d+\)/);
+    const text = await solveAndApply(page);
+    assert.match(text, /✖ Your club can't complete this SBC/);
+    assert.match(text, /Team rating: Min 95 \(best: \d+\)/);
     assert.equal(await page.evaluate(() => window.__saved), 0);
   } finally {
     await browser.close();
@@ -573,7 +604,7 @@ async function loadAllOnOrigin(page) {
   await page.evaluate(mockWebApp);
   await page.evaluate(mockOpenSbc);
   await page.evaluate(mockRequirements);
-  for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript]) {
+  for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript, panelScript]) {
     await page.addScriptTag({ content: readFileSync(f, 'utf8') });
   }
 }
@@ -584,31 +615,33 @@ test('preview: nothing is placed until "Fill these"; unticked cards are left out
     const page = await browser.newPage();
     await loadAllOnOrigin(page);
     const panel = page.locator('#fut-assistant-export');
-    const status = panel.locator('#oneClickStatus');
+    await panel.locator('#settings summary').click();
     await panel.locator('#protect').fill('85');
     await panel.locator('#protect').dispatchEvent('change');
-    await panel.locator('#oneClick').click();
-    await status.filter({ hasText: /^Found|Stopped/ }).waitFor({ timeout: 60000 });
-    assert.match(await status.textContent(), /^Found 11 cards for "Test Hybrid" · rating \d+ · chemistry \d+/);
+    assert.match(await panel.locator('#settingsSummary').textContent(), /^Keeping: 85\+ · favourites · active squad$/);
+    assert.equal(await findCards(page), 'plan');
+    assert.match(await resultText(page), /11 cards for this squad.*Rating\d+.*Chemistry\d+.*Requirements\d+\/\d+/);
     assert.equal(await panel.locator('#previewList input').count(), 11);
     assert.equal(await page.evaluate(() => window.__saved), 0, 'the preview places nothing');
 
     // Untick the first card, keep it for good, and solve again.
     const first = panel.locator('#previewList input').first();
     const keptId = await first.getAttribute('data-id');
+    assert.equal(await panel.locator('#resolvePlan').isVisible(), false);
     await first.uncheck();
-    await panel.locator('#applyPlan').click();
-    await status.filter({ hasText: /Some cards are unticked/ }).waitFor({ timeout: 5000 });
+    // With a card unticked, placing waits until the squad is solved again without it.
+    assert.equal(await panel.locator('#applyPlan').isDisabled(), true);
+    assert.equal(await panel.locator('#resolvePlan').textContent(), 'Swap out 1 unticked card');
     assert.equal(await page.evaluate(() => window.__saved), 0);
     await panel.locator('#rememberKeep').check();
     await panel.locator('#resolvePlan').click();
-    await status.filter({ hasText: /^Found|Stopped/ }).waitFor({ timeout: 60000 });
+    await waitState(page, ['plan', 'notice']);
     const ids = await panel.locator('#previewList input').evaluateAll((els) => els.map((e) => e.dataset.id));
     assert.equal(ids.length, 11);
     assert.ok(!ids.includes(keptId), 'the unticked card is not offered again');
 
     await panel.locator('#applyPlan').click();
-    await status.filter({ hasText: /Placed|Stopped/ }).waitFor({ timeout: 60000 });
+    await waitState(page, ['outcome', 'notice']);
     const placed = await page.evaluate(() => window.__placed.filter(Boolean).map(String));
     assert.equal(placed.length, 11);
     assert.ok(!placed.includes(keptId));
@@ -624,11 +657,20 @@ test('preview: nothing is placed until "Fill these"; unticked cards are left out
     assert.equal(stored.settings.protectMinRating, 85);
     assert.deepEqual(stored.kept, [keptId]);
     assert.deepEqual(stored.draft.sort(), placed.sort());
-    assert.match(await panel.locator('#clearKept').textContent(), /Stop keeping 1 card/);
+    assert.match(await panel.locator('#clearKept').textContent(), /Stop keeping the 1 card\(s\) I chose/);
+    assert.match(await panel.locator('#settingsSummary').textContent(), /· 1 chosen$/);
+
+    // Minimise: the panel folds into a pill and stays folded after a reload.
+    await panel.locator('#min').click();
+    assert.equal(await panel.locator('#box').isVisible(), false);
+    assert.equal(await panel.locator('#pill').isVisible(), true);
 
     // After a reload the setting is back, and the kept card stays out.
     await page.unroute('http://fut.test/');
     await loadAllOnOrigin(page);
+    assert.equal(await panel.locator('#pill').isVisible(), true);
+    await panel.locator('#pill').click();
+    assert.equal(await panel.locator('#box').isVisible(), true);
     assert.equal(await panel.locator('#protect').inputValue(), '85');
     const again = await page.evaluate(async (id) => {
       const H = window.__futAssistantExport;
@@ -658,11 +700,11 @@ test('cards in another SBC\'s draft are left out', { skip: !chromium && 'playwri
     }, taken);
     const res = await page.evaluate(async () => {
       const p = await window.__futAssistantOneClick.plan({}, () => {});
-      return { ids: p.cards.map((c) => String(c.id)), summary: p.summary };
+      return { ids: p.cards.map((c) => String(c.id)), drafts: p.leftOut.drafts };
     });
     assert.equal(res.ids.length, 11);
     assert.ok(taken.every((id) => !res.ids.includes(id)));
-    assert.match(res.summary, /Left out 4 card\(s\) in other SBC drafts/);
+    assert.equal(res.drafts, 4);
   } finally {
     await browser.close();
   }
@@ -677,11 +719,17 @@ test('"Keep my active squad" can be turned off; no buying hint when the SBC has 
     // Everything except three cards is in the active squad.
     await page.evaluate(() => { window.services.SBC.isItemInSquad = (id) => id > 5002; });
     const text = await solveAndApply(page);
-    assert.match(text, /Stopped: Can't complete this with your club\. Only \d+ usable players/);
-    assert.match(text, /card\(s\) in your active squad were kept; untick "Keep my active squad" to allow them\./);
+    assert.match(text, /✖ Your club can't complete this SBC/);
+    assert.match(text, /Only \d+ usable players/);
+    assert.match(text, /\d+ active-squad cards were kept out\./);
     assert.doesNotMatch(text, /Buying/); // "Test Hybrid" has league and nation rules
-    const off = await page.evaluate(async () => (await window.__futAssistantOneClick.plan({ protectSquad: false }, () => {})).cards.length);
-    assert.equal(off, 11);
+    // The fix is one button away, for this search only (the setting stays on).
+    await page.locator('#fut-assistant-export #result button', { hasText: 'Try with active-squad cards' }).click();
+    await waitState(page, ['plan', 'notice']);
+    assert.equal(await panelState(page), 'plan');
+    assert.equal(await page.locator('#fut-assistant-export #previewList input').count(), 11);
+    assert.match(await resultText(page), /Active squad/);
+    assert.equal(await page.evaluate(() => window.__futAssistantExport.settings().protectSquad), true);
   } finally {
     await browser.close();
   }
@@ -698,8 +746,84 @@ test('when the club falls short, it says what buying would fix', { skip: !chromi
       c.eligibilityRequirements = [{ scope: 0, count: -1, kvPairs: { _collection: { 2: [86] } } }];
     });
     const text = await solveAndApply(page);
-    assert.match(text, /Stopped: Can't complete this with your club\. Team rating: Min 86 \(best: \d+\)\./);
-    assert.match(text, /Buying \d+× any \d+-rated.* would make it possible \(about [\d,]+ coins by estimate\)\. Buy them yourself/);
+    assert.match(text, /✖ Your club can't complete this SBC/);
+    assert.match(text, /Team rating: Min 86 \(best: \d+\)/);
+    assert.match(text, /Buying \d+× any \d+-rated.* would make it possible \(about [\d,]+ coins, estimated\)\. Buy them yourself, then press Re-read\./);
+    assert.equal(await page.evaluate(() => window.__saved), 0);
+  } finally {
+    await browser.close();
+  }
+});
+
+// ---- The panel: what's on screen, unreachable targets, and stale results ----
+
+test('panel: no SBC open means nothing to press', { skip: !chromium && 'playwright not installed', timeout: 60000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><html><body></body></html>');
+    await page.evaluate(mockWebApp);
+    await page.evaluate(() => { window.getAppMain = () => ({ getRootViewController: () => ({}) }); });
+    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript, panelScript]) {
+      await page.addScriptTag({ content: readFileSync(f, 'utf8') });
+    }
+    assert.match(await contextText(page), /No SBC open.*Open an SBC in the Web App to start\./);
+    assert.deepEqual(await mainButton(page), { label: 'Open an SBC first', disabled: true });
+    assert.match(await page.locator('#fut-assistant-export #clubInfo').textContent(), /read on first search/);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('panel: a points target the club can\'t reach is said up front, with the fix one button away', { skip: !chromium && 'playwright not installed', timeout: 90000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<!doctype html><html><body></body></html>');
+    await page.evaluate(mockWebApp);
+    await page.evaluate(mockWorkArea);
+    for (const f of [bundleScript, script, prefillScript, readerScript, workAreaScript, oneClickScript, panelScript]) {
+      await page.addScriptTag({ content: readFileSync(f, 'utf8') });
+    }
+    await page.evaluate(() => { window.__futAssistantExport.pause = () => Promise.resolve(); });
+    // What the club can reach without its active squad, then a target just above that.
+    const usable = await page.evaluate(async () => (await window.__futAssistantOneClick.plan({}, () => {})).points.usableTotal);
+    await page.evaluate((t) => { window.__vm._challenge.scoreRequirement = t; }, usable + 100);
+    await page.waitForFunction((t) => document.getElementById('fut-assistant-export').shadowRoot.getElementById('context').textContent
+      .includes(t.toLocaleString()), usable + 100);
+
+    assert.equal(await findCards(page), 'plan');
+    const text = await resultText(page);
+    assert.match(text, /✖ Your club can't finish this yet: 100 points short\./);
+    assert.match(text, /Allowing active-squad cards would make it possible\./);
+    assert.match(text, /Kept out: 4 active-squad cards/);
+    const apply = page.locator('#fut-assistant-export #applyPlan');
+    assert.equal(await apply.textContent(), 'Select anyway');
+
+    await page.locator('#fut-assistant-export #result button', { hasText: 'Try with active-squad cards' }).click();
+    await waitState(page, ['plan', 'notice']);
+    assert.match(await resultText(page), /✔ Your club can finish this/);
+    assert.equal(await apply.textContent(), 'Select in Work Area');
+    assert.equal(await page.evaluate(() => window.__vm._selectedItemIds.size), 0, 'nothing selected yet');
+  } finally {
+    await browser.close();
+  }
+});
+
+test('panel: cards found for one SBC are never placed into another', { skip: !chromium && 'playwright not installed', timeout: 90000 }, async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await loadAll(page);
+    assert.equal(await findCards(page), 'plan');
+    // The user opens a different SBC while the cards are showing.
+    await page.evaluate(() => {
+      window.getAppMain().getRootViewController().getPresentedViewController()
+        .getCurrentViewController().getCurrentController()._view.deep.holder.challenge.name = 'Another SBC';
+    });
+    await waitState(page, ['idle'], 5000);
+    assert.equal(await page.locator('#fut-assistant-export #applyPlan').count(), 0);
+    assert.match(await contextText(page), /Another SBC/);
     assert.equal(await page.evaluate(() => window.__saved), 0);
   } finally {
     await browser.close();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FUT Assistant",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Solves the open EA FC SBC on your computer and pre-fills one squad for you to check. Never submits, buys, sells or lists anything.",
   "content_scripts": [
     {
@@ -9,7 +9,7 @@
         "https://www.ea.com/*/ultimate-team/web-app/*",
         "https://www.ea.com/ultimate-team/web-app/*"
       ],
-      "js": ["solver-bundle.js", "club-export.js", "prefill.js", "sbc-reader.js", "work-area.js", "one-click.js"],
+      "js": ["solver-bundle.js", "club-export.js", "prefill.js", "sbc-reader.js", "work-area.js", "one-click.js", "panel.js"],
       "world": "MAIN",
       "run_at": "document_idle"
     }

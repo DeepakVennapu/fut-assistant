@@ -93,20 +93,39 @@
     await wait(back);
   }
 
+  // What the panel shows about an open points SBC, without loading anything (local reads only).
+  function describe(found) {
+    const { H } = need();
+    const { vm } = found;
+    const ch = vm.getChallenge?.() ?? vm._challenge;
+    return {
+      kind: 'points',
+      name: ch.name ?? 'this SBC',
+      target: Number(ch.scoreRequirement) || 0,
+      submitted: Number(ch.submittedScore) || 0,
+      selectedCount: Number(H.tryCall(() => vm.getSelectedCount())) || 0,
+      selectedScore: Number(H.tryCall(() => vm.getSelectedScore())) || 0,
+    };
+  }
+
+  const tagsFor = (card, inSquad) => [
+    card.duplicate ? 'Storage' : card.untradeable ? 'Untradeable' : 'Tradeable',
+    inSquad ? 'Active squad' : null,
+  ].filter(Boolean);
+
   // Works out the selection. Nothing is selected until apply() runs.
   async function plan(found, options, onStatus) {
     const { H, P, X } = need();
     const { vm, controller } = found;
-    const ch = vm.getChallenge?.() ?? vm._challenge;
-    const name = ch.name ?? 'this SBC';
-    const target = Number(ch.scoreRequirement) || 0;
-    const submitted = Number(ch.submittedScore) || 0;
+    const info = describe(found);
+    const { name, target, submitted } = info;
     const remaining = Math.max(0, target - submitted);
-    if (!target) throw new Error(`Couldn't read the points target of "${name}".`);
-    if (!remaining) throw new Error(`"${name}" already has all ${target.toLocaleString()} points.`);
-    const alreadySelected = () => (H.tryCall(() => vm.getSelectedCount()) ?? 0) > 0;
-    const mine = 'Some cards are already selected. Press Remove All first; FUT Assistant won\'t change your selection.';
-    if (alreadySelected()) throw new Error(mine);
+    if (!target) throw H.notice(`Couldn't read the points target of "${name}".`);
+    if (!remaining) throw H.notice(`"${name}" already has all its points.`, { tone: 'ok' });
+    const yours = () => H.notice(`You already have ${describe(found).selectedCount} cards selected`, {
+      lines: ['FUT Assistant won\'t change a selection you made.', 'Press Remove All in the Work Area, then try again.'],
+    });
+    if (info.selectedCount > 0) throw yours();
     const limit = Number(H.tryCall(() => vm.getSelectionLimit())) || 30;
 
     // Storage duplicates are the cheapest fodder; know which cards are in storage.
@@ -115,20 +134,23 @@
       await H.readStorage().catch(() => {});
     }
     await loadStorageTab(vm, onStatus);
-
-    const inDrafts = P.cardsInOtherDrafts(ch);
-    const inSquad = (e) => options.protectSquad !== false && H.tryCall(() => window.services.SBC.isItemInSquad(Number(e.id))) === true;
-    const scoreOf = (e) => Number(H.tryCall(() => vm._itemScoreMap.get(e.id)) ?? e.sbsScore) || 0;
-    const usable = () => [...vm._itemEntityMap.values()].filter((e) =>
-      H.tryCall(() => vm.isItemSelectable(e)) !== false && scoreOf(e) > 0 && !inSquad(e) && !inDrafts.has(String(e.id)) &&
-      !(Number(e.loans) > 0 || H.tryCall(() => e.isLimitedUse?.())));
     // The whole club is needed to say whether the target can be reached at all.
     await loadMore(vm, () => false, onStatus);
 
-    const entities = usable();
-    const byId = new Map(entities.map((e) => [String(e.id), e]));
-    const cards = entities.map((e) => X.normalizePlayer(H.toCard(e, H.storageIds.has(String(e.id)))));
-    const scores = new Map(entities.map((e) => [String(e.id), scoreOf(e)]));
+    const keepSquad = options.protectSquad !== false;
+    const inDrafts = P.cardsInOtherDrafts(vm._challenge);
+    const isInSquad = (e) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(e.id))) === true;
+    const scoreOf = (e) => Number(H.tryCall(() => vm._itemScoreMap.get(e.id)) ?? e.sbsScore) || 0;
+    const eligible = [...vm._itemEntityMap.values()].filter((e) =>
+      H.tryCall(() => vm.isItemSelectable(e)) !== false && scoreOf(e) > 0 && !inDrafts.has(String(e.id)) &&
+      !(Number(e.loans) > 0 || H.tryCall(() => e.isLimitedUse?.())));
+    const squadIds = new Set(eligible.filter(isInSquad).map((e) => String(e.id)));
+    const entities = keepSquad ? eligible.filter((e) => !squadIds.has(String(e.id))) : eligible;
+
+    const toCards = (list) => list.map((e) => X.normalizePlayer(H.toCard(e, H.storageIds.has(String(e.id)))));
+    const byId = new Map(eligible.map((e) => [String(e.id), e]));
+    const cards = toCards(entities);
+    const scores = new Map(eligible.map((e) => [String(e.id), scoreOf(e)]));
     const opts = {
       target: remaining, limit,
       protectMinRating: options.protectMinRating ?? 87,
@@ -137,20 +159,24 @@
       excludeIds: options.excludeIds ?? [],
     };
     const sel = X.selectForScore(cards, scores, opts);
+    const keptSquad = keepSquad ? squadIds.size : 0;
+    const allowSquad = keptSquad ? { label: 'Try with active-squad cards', retry: { protectSquad: false } } : null;
     if (!sel.cards.length) {
-      throw new Error(`No usable cards for "${name}" (cards rated ${opts.protectMinRating}+, favourites, special cards, ` +
-        'cards in your active squad and cards in other SBC drafts are kept).');
+      throw H.notice('No cards to use for this SBC', {
+        lines: [`Kept: cards rated ${opts.protectMinRating}+, favourites, special cards` +
+          (keptSquad ? `, ${keptSquad} active-squad cards` : '') + (inDrafts.size ? `, ${inDrafts.size} cards in other SBC drafts` : '') + '.'],
+        action: allowSquad,
+      });
     }
     const whole = X.planBatches(cards, scores, opts);
-    const outlook = whole.reachable
-      ? (whole.batches > 1 ? ` The full target takes ${whole.batches} submissions and ${whole.cards} of your cards.` : '')
-      : ` Your usable cards add up to ${whole.score.toLocaleString()} points: ${whole.shortBy.toLocaleString()} short of the ` +
-        `${remaining.toLocaleString()} still needed, so this SBC can't be finished without more cards or a lower "Keep cards rated".`;
+    // Would allowing the active squad make the target reachable? Only worth saying if so.
+    const squadWouldHelp = !whole.reachable && keptSquad > 0 &&
+      X.planBatches(toCards(eligible), scores, opts).reachable;
 
     const apply = async (setStatus) => {
       const wait = P.cooldownLeft();
-      if (wait > 0) throw new Error(`Please wait ${Math.ceil(wait / 1000)}s before the next pre-fill.`);
-      if (alreadySelected()) throw new Error(mine);
+      if (wait > 0) throw H.notice(`Please wait ${Math.ceil(wait / 1000)} s`, { lines: ['FUT Assistant waits 30 seconds between fills.'], tone: 'info' });
+      if (describe(found).selectedCount > 0) throw yours();
       setStatus('Selecting cards…');
       const view = H.tryCall(() => controller.getView());
       let selected = 0;
@@ -171,28 +197,52 @@
       // Requirement lines only ("OVR Min: 45"); the same list on screen also holds the reward card.
       const check = (window.__futAssistantSbc?.screenText?.() ?? []).filter((t) => t && !t.includes('\n') && t.includes(':'));
       const left = remaining - (Number.isFinite(eaScore) ? eaScore : sel.score);
+      if (!agrees) {
+        return {
+          tone: 'bad',
+          title: 'EA shows a different selection',
+          lines: [`EA: ${eaCount} cards, ${Number.isFinite(eaScore) ? eaScore.toLocaleString() : '?'} points. ` +
+            `FUT Assistant: ${sel.cards.length} cards, ${sel.score.toLocaleString()} points.`],
+          next: 'Check the selection, or press Remove All in the Work Area.',
+          cards: sel.cards,
+        };
+      }
       return {
+        tone: whole.reachable ? 'ok' : 'warn',
+        title: `Selected ${selected} cards · ${eaScore.toLocaleString()} points`,
+        lines: [
+          'EA\'s progress bar agrees.',
+          left > 0 ? `${left.toLocaleString()} points still needed after this batch.` : 'That covers the target.',
+          !whole.reachable ? `Your club can't reach ${target.toLocaleString()} yet (${whole.shortBy.toLocaleString()} short). ` +
+            'Cards you submit now only count if you finish before it expires.' : null,
+          check.length ? `Check yourself: ${check.join('; ')}.` : null,
+        ],
+        next: left > 0 && whole.reachable
+          ? 'In EA: Review Selection → Confirm Submission. Then come back for the next batch.'
+          : 'In EA: Review Selection → Confirm Submission, when you\'re sure.',
         cards: sel.cards,
-        message: `Selected ${selected} card(s) · ${sel.score.toLocaleString()} points for "${name}" · card value ` +
-          `${Math.round(sel.cost).toLocaleString()}.` +
-          (agrees ? ` ✔ EA shows ${eaScore.toLocaleString()} points selected.`
-            : ` ✖ EA shows ${Number.isFinite(eaScore) ? eaScore.toLocaleString() : '?'} points for ${eaCount} card(s). ` +
-              'Check the selection before reviewing.') +
-          (left > 0 ? ` ${left.toLocaleString()} more needed after this; submit it, then click again for the next batch.`
-            : ' That covers the target.') +
-          (check.length ? ` ⚠ Check yourself: ${check.join('; ')}.` : '') +
-          ' Press Review Selection and submit it yourself.',
       };
     };
 
     return {
-      cards: sel.cards,
-      summary: `Found ${sel.cards.length} card(s) worth ${sel.score.toLocaleString()} of the ${remaining.toLocaleString()} points ` +
-        `"${name}" still needs · card value ${Math.round(sel.cost).toLocaleString()}.${outlook}` +
-        (inDrafts.size ? ` Left out ${inDrafts.size} card(s) in other SBC drafts.` : ''),
+      kind: 'points',
+      name,
+      cards: sel.cards.map((c) => ({
+        id: c.id, name: c.name, rating: c.rating, pos: c.positions[0] ?? '', score: c.score, value: c.price,
+        tags: tagsFor(c, squadIds.has(String(c.id))),
+      })),
+      value: sel.cost,
+      points: {
+        target, submitted, remaining, batch: sel.score, after: Math.max(0, remaining - sel.score), limit,
+        reachable: whole.reachable, batches: whole.batches, cardsNeeded: whole.cards,
+        // Everything the usable cards could add, not just what reaching the target takes.
+        usableTotal: submitted + sel.available, shortBy: whole.shortBy, squadWouldHelp,
+      },
+      leftOut: { drafts: inDrafts.size, squad: keptSquad },
+      action: squadWouldHelp ? allowSquad : null,
       apply,
     };
   }
 
-  window.__futAssistantWorkArea = { find, plan, looksLikeWorkArea };
+  window.__futAssistantWorkArea = { find, describe, plan, looksLikeWorkArea };
 })();
