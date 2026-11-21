@@ -44,6 +44,8 @@ function mockWebApp() {
     Club: { search(c) { window.__calls.push(`search:${c.offset}`); return observable({ items: window.__club.slice(c.offset, c.offset + Math.min(c.count, 77)) }); } },
     Item: { searchStorageItems(c) { window.__calls.push(`storage:${c.count}`); return observable({ items: window.__storage }); } },
     Localization: { localize: (k) => names[k] ?? `*${k}`, repository: { _collection: names } },
+    // Logged in: EA's user lookup returns the account (null when logged out).
+    User: { getUser: () => ({ id: 1 }) },
   };
   window.__club = club;
   window.__storage = storage;
@@ -688,7 +690,7 @@ test('cards in another SBC\'s draft are left out', { skip: !chromium && 'playwri
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage();
-    await loadAll(page);
+    await loadAllOnOrigin(page);
     await page.evaluate(() => { window.__futAssistantExport.pause = () => Promise.resolve(); });
     const free = await page.evaluate(async () => (await window.__futAssistantOneClick.plan({}, () => {})).cards.map((c) => String(c.id)));
     // Another SBC the Web App has loaded holds four of those cards in its saved squad.
@@ -705,6 +707,13 @@ test('cards in another SBC\'s draft are left out', { skip: !chromium && 'playwri
     assert.equal(res.ids.length, 11);
     assert.ok(taken.every((id) => !res.ids.includes(id)));
     assert.equal(res.drafts, 4);
+    // A draft whose cards have left the club (it was submitted) counts for nothing.
+    const gone = await page.evaluate(async () => {
+      window.__futAssistantExport.store.set('drafts', { 999: { name: 'Submitted SBC', ids: ['91', '92'], at: Date.now() } });
+      const stored = Object.keys(window.__futAssistantPrefill.draftRecords()).length;
+      return { stored, drafts: (await window.__futAssistantOneClick.plan({}, () => {})).leftOut.drafts };
+    });
+    assert.deepEqual(gone, { stored: 1, drafts: 4 });
   } finally {
     await browser.close();
   }
@@ -770,6 +779,11 @@ test('panel: no SBC open means nothing to press', { skip: !chromium && 'playwrig
     assert.match(await contextText(page), /No SBC open.*Open an SBC in the Web App to start\./);
     assert.deepEqual(await mainButton(page), { label: 'Open an SBC first', disabled: true });
     assert.match(await page.locator('#fut-assistant-export #clubInfo').textContent(), /read on first search/);
+
+    // Logged out (as on EA's Login screen): say so instead.
+    await page.evaluate(() => { window.services.User.getUser = () => null; });
+    await page.waitForFunction(() => /Not logged in/.test(document.getElementById('fut-assistant-export').shadowRoot.getElementById('context').textContent));
+    assert.deepEqual(await mainButton(page), { label: 'Log in first', disabled: true });
   } finally {
     await browser.close();
   }
@@ -825,6 +839,20 @@ test('panel: cards found for one SBC are never placed into another', { skip: !ch
     assert.equal(await page.locator('#fut-assistant-export #applyPlan').count(), 0);
     assert.match(await contextText(page), /Another SBC/);
     assert.equal(await page.evaluate(() => window.__saved), 0);
+
+    // Messages too: a refusal for one SBC doesn't linger on the next.
+    await page.evaluate(() => {
+      window.getAppMain().getRootViewController().getPresentedViewController()
+        .getCurrentViewController().getCurrentController()._view.deep.holder.challenge
+        .eligibilityRequirements = [{ scope: 0, count: -1, kvPairs: { _collection: { 2: [95] } } }];
+    });
+    assert.equal(await findCards(page), 'notice');
+    await page.evaluate(() => {
+      window.getAppMain().getRootViewController().getPresentedViewController()
+        .getCurrentViewController().getCurrentController()._view.deep.holder.challenge.name = 'A third SBC';
+    });
+    await waitState(page, ['idle'], 5000);
+    assert.equal(await resultText(page), '');
   } finally {
     await browser.close();
   }

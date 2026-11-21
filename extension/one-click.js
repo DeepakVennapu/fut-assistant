@@ -184,7 +184,8 @@
       })),
       value: res.cost,
       squad: { rating: ev.rating, chemistry: ev.chemistry?.total ?? null, met: ev.results.filter((r) => r.ok && r.kind !== 'unsupported').length, total, check },
-      leftOut: { drafts: inDrafts.size, squad: keptSquad },
+      // Only cards still in the club: a submitted draft's cards are gone, not kept out.
+      leftOut: { drafts: club.filter((c) => inDrafts.has(String(c.id))).length, squad: keptSquad },
       apply,
     };
   }

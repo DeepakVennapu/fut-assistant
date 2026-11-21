@@ -164,7 +164,7 @@
     if (!sel.cards.length) {
       throw H.notice('No cards to use for this SBC', {
         lines: [`Kept: cards rated ${opts.protectMinRating}+, favourites, special cards` +
-          (keptSquad ? `, ${keptSquad} active-squad cards` : '') + (inDrafts.size ? `, ${inDrafts.size} cards in other SBC drafts` : '') + '.'],
+          (keptSquad ? `, ${keptSquad} active-squad cards` : '') + ', and cards in other SBC drafts.'],
         action: allowSquad,
       });
     }
@@ -238,7 +238,8 @@
         // Everything the usable cards could add, not just what reaching the target takes.
         usableTotal: submitted + sel.available, shortBy: whole.shortBy, squadWouldHelp,
       },
-      leftOut: { drafts: inDrafts.size, squad: keptSquad },
+      // Only cards still in the club: a submitted draft's cards are gone, not kept out.
+      leftOut: { drafts: [...vm._itemEntityMap.keys()].filter((id) => inDrafts.has(String(id))).length, squad: keptSquad },
       action: squadWouldHelp ? allowSquad : null,
       apply,
     };

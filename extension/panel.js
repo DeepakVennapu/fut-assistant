@@ -54,13 +54,15 @@
     .meter .done { background: #2f6f52; } .meter .batch { background: #3ecf8e; }
     .verdict { margin: 8px 0 4px; padding: 7px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
     .verdict.ok { background: #183a2b; color: #7ee2b0; } .verdict.bad { background: #3a1d1d; color: #ff9a9a; }
-    .list { margin: 8px 0 4px; max-height: 210px; overflow: auto; border-top: 1px solid #262b36; }
+    .list { margin: 8px 0 4px; max-height: 170px; overflow: auto; border-top: 1px solid #262b36; }
     .listhead { font-size: 11px; color: #9aa3af; margin-top: 8px; }
-    .row { display: grid; grid-template-columns: 16px 22px 1fr auto auto; gap: 6px; align-items: center;
+    .row { display: grid; grid-template-columns: 16px 24px 1fr; gap: 6px; align-items: center;
       padding: 4px 0; border-bottom: 1px solid #222733; font-size: 12px; }
     .row input { margin: 0; }
-    .row .r { font-weight: 700; } .row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .row .m { color: #9aa3af; font-size: 11px; text-align: right; white-space: nowrap; }
+    .row .r { font-weight: 700; font-size: 13px; }
+    .row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row .m { color: #9aa3af; font-size: 11px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .row .m b { color: #7ee2b0; font-weight: 600; }
     .row.off { opacity: .45; }
     .tag { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #262b36; color: #c4cad3; white-space: nowrap; }
     .tag.Storage { background: #183a2b; color: #7ee2b0; } .tag.Tradeable { background: #3b2f17; color: #f5c56b; }
@@ -134,6 +136,7 @@
     let excluded = [];         // cards unticked in this search ("Swap out unticked")
     let oneOff = {};           // options for this search only (e.g. allow active squad)
     let current = { kind: 'none' };
+    let shownFor = null;      // the SBC the result area is about
 
     // ---- Settings (remembered in this browser only) ----
     const cfg = () => H()?.settings?.() ?? { protectMinRating: 87, preview: true, protectFavorites: true, protectSquad: true };
@@ -190,10 +193,16 @@
         ? `Club: ${fmt(H().itemCache.size)} cards · read ${ago(info.readAt)}`
         : 'Club: read on first search (about 10 s)';
       if (busy) return;
-      if (!H()?.webAppReady?.()) { setContext('Waiting for the Web App', 'Log in and let it finish loading.'); setMain('Find cards', false); return; }
+      if (!H()?.webAppReady?.()) { setContext('Waiting for the Web App', 'Let it finish loading.'); setMain('Find cards', false); return; }
+      // Logged out, EA's user lookup is empty (read-only check).
+      if (H().tryCall(() => window.services.User.getUser()) == null) {
+        setContext('Not logged in', 'Log in to the Web App to start.');
+        setMain('Log in first', false);
+        return;
+      }
       current = readScreen();
-      // A different SBC is open than the cards were found for: drop the stale plan.
-      if (plan && (current.kind === 'none' || current.name !== plan.name)) clearResult();
+      // A different SBC is open than the result is about: drop it (cards, messages, all).
+      if (result.dataset.state !== 'idle' && shownFor !== null && (current.kind === 'none' || current.name !== shownFor)) clearResult();
       if (current.kind === 'none') {
         setContext('No SBC open', 'Open an SBC in the Web App to start.');
         setMain('Open an SBC first', false);
@@ -221,6 +230,7 @@
 
     function showMessage({ tone = 'info', title, lines = [], next, action }, state) {
       clearResult();
+      shownFor = current.kind === 'none' ? null : current.name;
       const card = el('div', `card ${tone}`);
       const icon = { ok: '✔ ', bad: '✖ ', warn: '⚠ ', info: '' }[tone] ?? '';
       card.append(el('h3', null, icon + title));
@@ -240,6 +250,7 @@
     function showPlan(p) {
       clearResult();
       plan = p;
+      shownFor = p.name;
       const card = el('div', 'card');
       card.append(el('h3', null, p.kind === 'points' ? 'Cards for this batch' : `${p.cards.length} cards for this squad`));
       let unreachable = false;
@@ -284,10 +295,15 @@
         const row = el('label', 'row');
         const box = el('input'); box.type = 'checkbox'; box.checked = true; box.dataset.id = c.id;
         box.addEventListener('change', () => { row.classList.toggle('off', !box.checked); syncPlanButtons(); });
-        const tags = el('span');
-        for (const t of c.tags) tags.append(el('span', `tag ${t.split(' ')[0]}`, t), document.createTextNode(' '));
-        const meta = p.kind === 'points' ? `+${fmt(c.score)} pts` : c.pos;
-        row.append(box, el('span', 'r', c.rating), el('span', 'n', `${c.name}${meta ? ` · ${meta}` : ''}`), tags, el('span', 'm', fmt(c.value)));
+        // Two lines: the name, then what matters for this SBC (points or position), the tags and the value.
+        const text = el('span');
+        const meta = el('span', 'm');
+        if (p.kind === 'points') meta.append(el('b', null, `+${fmt(c.score)} pts`));
+        else if (c.pos) meta.append(el('span', null, c.pos));
+        for (const t of c.tags) meta.append(el('span', `tag ${t.split(' ')[0]}`, t));
+        meta.append(el('span', null, `${fmt(c.value)} coins`));
+        text.append(el('div', 'n', c.name), meta);
+        row.append(box, el('span', 'r', c.rating), text);
         row.title = `${c.name}: ${c.tags.join(', ')}, worth about ${fmt(c.value)} coins`;
         list.append(row);
       }
