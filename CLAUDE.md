@@ -50,16 +50,18 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
 - `extension/`: a Chrome MV3 extension. Its scripts run in the Web App page's own context
   (`"world": "MAIN"`), in this order:
   - `solver-bundle.js`: GENERATED from `src/` by `npm run build`. A test fails if it's stale.
-  - `club-export.js`: the panel, paced club and storage reads, and the club export file.
+  - `club-export.js`: paced club and storage reads, card mapping, settings, the club export file.
   - `prefill.js`: finds the open SBC, places cards, saves the draft once, enforces the 30 s wait.
   - `sbc-reader.js`: maps EA's requirement data to the solver's format, using the Web App's
     `SBCEligibilityKey` and `SBCEligibilityScope` tables at runtime.
   - `work-area.js`: points SBCs. Selects cards in the Work Area like a tap; never reviews or submits.
-  - `one-click.js`: **Solve & pre-fill**. Reads the SBC, uses the cached club, solves, fills.
+  - `one-click.js`: `screen()` (what's open), `plan()` (solve, structured result) → `apply()`.
+  - `panel.js`: the panel. Reads `screen()` once a second (local only), renders plans,
+    outcomes and notices (`H.notice(title, { lines, action })`), settings and troubleshooting.
 
 ## Status
 
-- 34 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
+- 37 tests pass (`npm test`; the Playwright tests need `npm install --no-save playwright` and
   `npx playwright install chromium`, otherwise they skip). They run the extension against a
   **mock** of the Web App whose shapes now follow what the real FC 27 Web App returns.
 - **Tested on EA's real FC 27 Web App on 2026-11-16** (branch `fix/real-webapp-testing`):
@@ -106,6 +108,13 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - "Keep my active squad" is a setting (on by default). EA's `isItemInSquad` covers starters,
     subs and reserves: 23 cards on the test club, which made one SBC unsolvable with it on.
   - The buying hint is only given for SBCs without league, nation or club rules.
+- **Panel redesign (branch `feat/clearer-panel`), checked live 2026-11-21:** context line and
+  button follow the open SBC; points preview leads with target / this batch / left after and a
+  can-or-can't-finish verdict; refusals carry a "Try with active-squad cards" button; the panel
+  minimises to a pill and remembers it. Logged out, `services.User.getUser()` is null.
+  - Known: the squad solver is a randomized search. On "3 Leagues & 2 Nations" it reached
+    chemistry 29 of 30, and only 27 with more cards allowed, so a refusal can be wrong by a point
+    or two on chemistry-heavy SBCs.
 - **Still unverified:**
   - Favourites (the test club had none).
   - Brick SBCs (fewer than 11 spots): none were available to test.
@@ -135,7 +144,7 @@ FUT Assistant does the same core job locally: no third-party login, no limits.
   - item fields (`toCard`): positions, rarity, untradeable, base id;
   - league, nation and club name lookups (they fall back to ids);
   - requirement key names; quality values 1/2/3 and rarity group 4 = "Rare" are guesses.
-- When the owner reports a problem, ask for the **Copy SBC requirements** output (under More tools)
+- When the owner reports a problem, ask for the **Copy SBC requirements** output (under Troubleshooting tools)
   and the exported club file's `meta.sampleKeys`.
 
 ## Next step: finish testing on the real Web App

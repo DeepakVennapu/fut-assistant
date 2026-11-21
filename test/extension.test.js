@@ -702,11 +702,12 @@ test('cards in another SBC\'s draft are left out', { skip: !chromium && 'playwri
     }, taken);
     const res = await page.evaluate(async () => {
       const p = await window.__futAssistantOneClick.plan({}, () => {});
-      return { ids: p.cards.map((c) => String(c.id)), drafts: p.leftOut.drafts };
+      return { ids: p.cards.map((c) => String(c.id)), drafts: p.leftOut.drafts, names: p.leftOut.draftNames };
     });
     assert.equal(res.ids.length, 11);
     assert.ok(taken.every((id) => !res.ids.includes(id)));
     assert.equal(res.drafts, 4);
+    assert.deepEqual(res.names, ['Other SBC']);
     // A draft whose cards have left the club (it was submitted) counts for nothing.
     const gone = await page.evaluate(async () => {
       window.__futAssistantExport.store.set('drafts', { 999: { name: 'Submitted SBC', ids: ['91', '92'], at: Date.now() } });
@@ -778,7 +779,7 @@ test('panel: no SBC open means nothing to press', { skip: !chromium && 'playwrig
     }
     assert.match(await contextText(page), /No SBC open.*Open an SBC in the Web App to start\./);
     assert.deepEqual(await mainButton(page), { label: 'Open an SBC first', disabled: true });
-    assert.match(await page.locator('#fut-assistant-export #clubInfo').textContent(), /read on first search/);
+    assert.match(await page.locator('#fut-assistant-export #clubInfo').textContent(), /read when a squad SBC needs it/);
 
     // Logged out (as on EA's Login screen): say so instead.
     await page.evaluate(() => { window.services.User.getUser = () => null; });

@@ -108,6 +108,13 @@
     };
   }
 
+  // Cards still in the club that sit in other SBC drafts, and which SBCs those are.
+  // (A submitted draft's cards are gone from the club, so they don't count.)
+  function draftsLeftOut(inDrafts, clubIds) {
+    const held = clubIds.map(String).filter((id) => inDrafts.has(id));
+    return { drafts: held.length, draftNames: [...new Set(held.map((id) => inDrafts.from?.get(id) ?? 'another SBC'))] };
+  }
+
   const tagsFor = (card, inSquad) => [
     card.duplicate ? 'Storage' : card.untradeable ? 'Untradeable' : 'Tradeable',
     inSquad ? 'Active squad' : null,
@@ -239,11 +246,11 @@
         usableTotal: submitted + sel.available, shortBy: whole.shortBy, squadWouldHelp,
       },
       // Only cards still in the club: a submitted draft's cards are gone, not kept out.
-      leftOut: { drafts: [...vm._itemEntityMap.keys()].filter((id) => inDrafts.has(String(id))).length, squad: keptSquad },
+      leftOut: { ...draftsLeftOut(inDrafts, [...vm._itemEntityMap.keys()]), squad: keptSquad },
       action: squadWouldHelp ? allowSquad : null,
       apply,
     };
   }
 
-  window.__futAssistantWorkArea = { find, describe, plan, looksLikeWorkArea };
+  window.__futAssistantWorkArea = { find, describe, plan, draftsLeftOut, looksLikeWorkArea };
 })();

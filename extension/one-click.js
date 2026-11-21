@@ -134,7 +134,7 @@
       throw H.notice("Your club can't complete this SBC", {
         lines: [
           ...why,
-          keptSquad ? `${keptSquad} active-squad cards were kept out.` : null,
+          keptSquad ? `${keptSquad} active-squad card${keptSquad === 1 ? ' was' : 's were'} kept out.` : null,
           whatToBuy(X, club, sbc, opts),
         ],
         action: keptSquad ? { label: 'Try with active-squad cards', retry: { protectSquad: false } } : null,
@@ -185,7 +185,7 @@
       value: res.cost,
       squad: { rating: ev.rating, chemistry: ev.chemistry?.total ?? null, met: ev.results.filter((r) => r.ok && r.kind !== 'unsupported').length, total, check },
       // Only cards still in the club: a submitted draft's cards are gone, not kept out.
-      leftOut: { drafts: club.filter((c) => inDrafts.has(String(c.id))).length, squad: keptSquad },
+      leftOut: { ...window.__futAssistantWorkArea.draftsLeftOut(inDrafts, club.map((c) => c.id)), squad: keptSquad },
       apply,
     };
   }

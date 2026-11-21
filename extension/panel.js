@@ -191,7 +191,7 @@
       const info = H()?.clubState;
       $('clubInfo').textContent = info?.clubComplete && info.readAt
         ? `Club: ${fmt(H().itemCache.size)} cards · read ${ago(info.readAt)}`
-        : 'Club: read on first search (about 10 s)';
+        : 'Club: read when a squad SBC needs it (about 10 s)';
       if (busy) return;
       if (!H()?.webAppReady?.()) { setContext('Waiting for the Web App', 'Let it finish loading.'); setMain('Find cards', false); return; }
       // Logged out, EA's user lookup is empty (read-only check).
@@ -308,8 +308,15 @@
         list.append(row);
       }
       card.append(list);
-      const left = [p.leftOut.squad && `${p.leftOut.squad} active-squad cards`, p.leftOut.drafts && `${p.leftOut.drafts} cards in other SBC drafts`].filter(Boolean);
-      if (left.length) card.append(el('div', 'note', `Kept out: ${left.join(' · ')}`));
+      const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+      const names = p.leftOut.draftNames ?? [];
+      const where = names.length === 1 ? `your "${names[0]}" draft` : `${names.length || 'other'} other SBC drafts`;
+      const left = [p.leftOut.squad && `${n(p.leftOut.squad, 'active-squad card')}`, p.leftOut.drafts && `${n(p.leftOut.drafts, 'card')} in ${where}`].filter(Boolean);
+      if (left.length) {
+        const note = el('div', 'note', `Kept out: ${left.join(' · ')}`);
+        if (p.leftOut.drafts) note.title = 'Cards in other SBC drafts stay out for a week, or until you press Re-read.';
+        card.append(note);
+      }
 
       const keep = el('label', 'opts');
       const keepBox = el('input'); keepBox.type = 'checkbox'; keepBox.id = 'rememberKeep';

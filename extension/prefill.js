@@ -231,15 +231,18 @@
   function cardsInOtherDrafts(challenge) {
     const { tryCall } = H();
     const mine = challenge?.id == null ? null : String(challenge.id);
+    // The Set of card ids, plus `ids.from`: card id → the SBC whose draft holds it (for the panel).
     const ids = new Set();
-    for (const [id, rec] of Object.entries(draftRecords())) if (id !== mine) rec.ids.forEach((x) => ids.add(String(x)));
+    ids.from = new Map();
+    const add = (cardId, sbcName) => { ids.add(String(cardId)); ids.from.set(String(cardId), sbcName || 'another SBC'); };
+    for (const [id, rec] of Object.entries(draftRecords())) if (id !== mine) rec.ids.forEach((x) => add(x, rec.name));
     const list = (c) => (!c ? [] : Array.isArray(c) ? c : Object.values(c._collection ?? c));
     for (const set of list(tryCall(() => window.services.SBC.repository.sets))) {
       for (const ch of list(tryCall(() => set.challenges) ?? tryCall(() => set.getChallenges()))) {
         if (!ch?.squad || ch === challenge || (mine && String(ch.id) === mine)) continue;
         for (const slot of tryCall(() => ch.squad.getFieldPlayers()) ?? []) {
           const item = slot?.item ?? tryCall(() => slot.getItem());
-          if (item?.id && Number(item.definitionId) > 0) ids.add(String(item.id));
+          if (item?.id && Number(item.definitionId) > 0) add(item.id, ch.name);
         }
       }
     }
