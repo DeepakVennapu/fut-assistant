@@ -1,12 +1,14 @@
-// FUT Assistant – solve and pre-fill the open SBC.
+// FUT Assistant – find cards for the open SBC, then place them.
 //
-// plan():  reads the open SBC (no network), uses your club (read once per session at the
-//          paced speed, then reused), and solves on your computer. Nothing is placed yet.
-// apply(): places that one squad with the pre-fill step (saves the draft once), or selects
-//          the cards of a points SBC. Never submits.
+// screen(): what's open in the Web App right now (local reads only, no network).
+// plan():   reads the open SBC (no network), uses your club (read once per session at the
+//           paced speed, then reused), and solves on your computer. Nothing is placed yet.
+//           Returns the numbers, the cards and an apply() function for the panel.
+// apply():  places that one squad with the pre-fill step (saves the draft once), or selects
+//           the cards of a points SBC. Never submits.
 //
 // Cards sitting in another SBC's saved draft, and cards from an earlier fill this session,
-// are left out. "Re-read my club" starts fresh.
+// are left out. "Re-read" starts fresh.
 
 (() => {
   'use strict';
@@ -31,6 +33,7 @@
       H.itemCache.clear();
       H.clubState.clubComplete = false;
       H.clubState.storageRead = false;
+      H.clubState.readAt = null;
       placedEarlier.clear();
       P.forgetDrafts();
     }
@@ -50,41 +53,60 @@
 
   async function refreshClub(onStatus) {
     const data = await loadClub(onStatus, true);
-    return `Club re-read: ${data.meta.clubCards} club + ${data.meta.storageCards} storage cards.`;
+    return { tone: 'ok', title: 'Club re-read', lines: [`${data.meta.clubCards} club cards and ${data.meta.storageCards} in SBC storage.`] };
   }
 
-  const checkWait = (P) => {
+  // What's on screen: { kind: 'none' } | { kind: 'squad', name, filled, slots, met } |
+  // { kind: 'points', name, target, submitted, selectedCount, selectedScore }.
+  function screen() {
+    const { H, P } = need();
+    const W = window.__futAssistantWorkArea;
+    const wa = H.tryCall(() => W?.find());
+    if (wa) return W.describe(wa);
+    let ch;
+    try { ch = P.findOpenChallenge(); } catch { return { kind: 'none' }; }
+    const slots = H.tryCall(() => ch.squad.getFieldPlayers()) ?? [];
+    const open = slots.filter((s) => !H.tryCall(() => s?.isBrick?.()));
+    const filled = open.filter((s) => Number((s?.item ?? H.tryCall(() => s.getItem()))?.definitionId) > 0).length;
+    const ea = filled ? P.eaCheck(ch) : null;
+    return { kind: 'squad', name: ch.name ?? 'this SBC', filled, slots: open.length, met: ea?.met ?? null, chemistry: ea?.chemistry ?? null, rating: ea?.rating ?? null };
+  }
+
+  const cooldownLeft = () => window.__futAssistantPrefill?.cooldownLeft() ?? 0;
+  const checkWait = (H, P) => {
     const wait = P.cooldownLeft();
-    if (wait > 0) throw new Error(`Please wait ${Math.ceil(wait / 1000)}s before the next pre-fill.`);
+    if (wait > 0) throw H.notice(`Please wait ${Math.ceil(wait / 1000)} s`, { lines: ['FUT Assistant waits 30 seconds between fills.'], tone: 'info' });
   };
-  const cardNote = (p) => [p.slot, p.duplicate ? 'storage' : p.untradeable ? 'untr.' : 'tradeable', coins(p.price)].filter(Boolean).join(' · ');
+  const tagsFor = (p, inSquad) => [
+    p.duplicate ? 'Storage' : p.untradeable ? 'Untradeable' : 'Tradeable',
+    inSquad ? 'Active squad' : null,
+  ].filter(Boolean);
 
   // When the club can't do it: would buying a few plain cards make it possible? Prices are
   // estimates by rating. "Any N-rated" cards have no league, nation or club, so the hint is
   // only given for SBCs without such rules (live, it once suggested bronzes for a club rule).
   function whatToBuy(X, club, sbc, opts) {
-    // Only where "any N-rated card" is a fair answer: no league, nation or club rules.
     const plain = (sbc.requirements ?? []).every((r) => ['teamRating', 'chemistry', 'playerChem'].includes(r.kind) ||
       ((r.kind === 'each' || r.kind === 'count') && Object.keys(r.filter ?? {}).every((k) => ['minRating', 'maxRating', 'quality'].includes(k))));
-    if (!plain) return '';
+    if (!plain) return null;
     try {
       const prices = Object.fromEntries(BUY_RATINGS.map((r) => [r, X.estimatePrice(r)]));
       const res = X.solve(club, sbc, { ...opts, market: { prices }, restarts: 2, iterations: 2000 });
       const buys = res.feasible ? res.squad.filter((p) => p.virtual) : [];
-      if (!buys.length) return '';
+      if (!buys.length) return null;
       const byRating = new Map();
       for (const b of buys) byRating.set(b.rating, (byRating.get(b.rating) ?? 0) + 1);
       const list = [...byRating.entries()].sort((a, b) => b[0] - a[0]).map(([r, n]) => `${n}× any ${r}-rated`).join(', ');
-      return ` Buying ${list} would make it possible (about ${coins(buys.reduce((a, p) => a + p.price, 0))} coins by estimate). ` +
-        'Buy them yourself, then press Re-read my club.';
-    } catch { return ''; }
+      return `Buying ${list} would make it possible (about ${coins(buys.reduce((a, p) => a + p.price, 0))} coins, estimated). ` +
+        'Buy them yourself, then press Re-read.';
+    } catch { return null; }
   }
 
   async function planSquad(options, onStatus) {
     const { H, P, S, X } = need();
     const read = S.readOpenSbc();
     const { sbc } = read;
-    if (!read.enumsFound) throw new Error("Couldn't read this SBC's requirements from the Web App. Use the debug tools instead.");
+    if (!read.enumsFound) throw H.notice("Couldn't read this SBC's requirements", { lines: ['The Web App may have changed. Use Copy SBC requirements under Troubleshooting.'] });
     const challenge = P.findOpenChallenge();
 
     const data = await loadClub(onStatus, false);
@@ -95,27 +117,34 @@
     const inDrafts = P.cardsInOtherDrafts(challenge);
     // Cards in your active squad (starters, subs and reserves; EA lists them) stay there unless
     // "Keep my active squad" is off. Drafts are handled above.
-    const inSquad = options.protectSquad === false ? []
-      : club.filter((p) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(p.id))) === true).map((p) => p.id);
+    const squadIds = new Set(club.filter((p) => H.tryCall(() => window.services.SBC.isItemInSquad(Number(p.id))) === true).map((p) => p.id));
+    const keepSquad = options.protectSquad !== false;
     const opts = {
       protectMinRating: options.protectMinRating ?? 87,
       protectFavorites: options.protectFavorites !== false,
       protectIds: options.protectIds ?? [],
-      excludeIds: [...new Set([...placedEarlier, ...inDrafts, ...inSquad, ...(options.excludeIds ?? [])])],
+      excludeIds: [...new Set([...placedEarlier, ...inDrafts, ...(keepSquad ? squadIds : []), ...(options.excludeIds ?? [])])],
     };
     const res = X.solve(club, sbc, opts);
+    const keptSquad = keepSquad ? squadIds.size : 0;
     if (!res.feasible) {
       const why = res.squad.length
-        ? res.evaluation.results.filter((r) => !r.ok).map((r) => `${r.label} (best: ${r.actual})`).join('; ')
-        : res.message;
-      const kept = inSquad.length ? ` ${inSquad.length} card(s) in your active squad were kept; untick "Keep my active squad" to allow them.` : '';
-      throw new Error(`Can't complete this with your club. ${why}.${kept}${whatToBuy(X, club, sbc, opts)}`);
+        ? res.evaluation.results.filter((r) => !r.ok).map((r) => `${r.label} (best: ${r.actual})`)
+        : [res.message];
+      throw H.notice("Your club can't complete this SBC", {
+        lines: [
+          ...why,
+          keptSquad ? `${keptSquad} active-squad card${keptSquad === 1 ? ' was' : 's were'} kept out.` : null,
+          whatToBuy(X, club, sbc, opts),
+        ],
+        action: keptSquad ? { label: 'Try with active-squad cards', retry: { protectSquad: false } } : null,
+      });
     }
 
     const ev = res.evaluation;
-    const numbers = `rating ${ev.rating} · chemistry ${ev.chemistry?.total ?? '–'} · card value ${coins(res.cost)}`;
+    const check = ev.results.filter((r) => r.unchecked || r.uncertain).map((r) => r.label);
     const apply = async (setStatus) => {
-      checkWait(P);
+      checkWait(H, P);
       const code = JSON.stringify({
         kind: 'fut-assistant-prefill', v: 1, sbc: sbc.name,
         cards: res.squad.map((p) => ({ id: p.id, name: p.name, rating: p.rating, slot: p.slot })),
@@ -123,38 +152,48 @@
       await P.run(code, setStatus);
       res.squad.forEach((p) => placedEarlier.add(p.id));
 
-      const check = ev.results.filter((r) => r.unchecked || r.uncertain).map((r) => r.label);
       // Ask EA's own squad screen whether it agrees, and say so loudly if it doesn't.
       await sleep(300);
       const ea = P.eaCheck();
-      let eaLine = '';
-      if (ea) {
-        const what = `EA shows rating ${ea.rating ?? '–'} · chemistry ${ea.chemistry ?? '–'}`;
-        if (ea.met) eaLine = ` ✔ ${what}, requirements met.`;
-        else {
-          const labels = ea.failing.map((i) => read.eaText?.[i] ?? `requirement ${i + 1}`);
-          eaLine = ` ✖ ${what}, and says NOT met: ${labels.join('; ') || 'see the list'}. Don't submit; clear the squad.`;
-        }
+      if (ea && !ea.met) {
+        const labels = ea.failing.map((i) => read.eaText?.[i] ?? `requirement ${i + 1}`);
+        return {
+          tone: 'bad',
+          title: 'EA says the requirements are NOT met',
+          lines: [`EA shows rating ${ea.rating ?? '–'}, chemistry ${ea.chemistry ?? '–'}.`, ...labels.map((l) => `✖ ${l}`)],
+          next: 'Don\'t submit. In EA: Clear Squad.',
+        };
       }
-      return `Placed ${res.squad.length} cards · ${numbers}.${eaLine}` +
-        (check.length ? ` ⚠ Check yourself: ${check.join('; ')}.` : '') +
-        ' Check the squad, then submit it yourself.';
+      return {
+        tone: 'ok',
+        title: `Placed ${res.squad.length} cards`,
+        lines: [
+          ea ? `EA confirms: requirements met, rating ${ea.rating ?? '–'}, chemistry ${ea.chemistry ?? '–'}.` : `Rating ${ev.rating}, chemistry ${ev.chemistry?.total ?? '–'}.`,
+          check.length ? `Check yourself: ${check.join('; ')}.` : null,
+        ],
+        next: 'In EA: check the squad, then Submit.',
+      };
     };
 
+    const total = ev.results.filter((r) => r.kind !== 'unsupported').length;
     return {
       kind: 'squad',
-      cards: res.squad.map((p) => ({ id: p.id, name: p.name, rating: p.rating, note: cardNote(p) })),
-      summary: `Found ${res.squad.length} cards for "${sbc.name}" · ${numbers}.` +
-        (inDrafts.size ? ` Left out ${inDrafts.size} card(s) in other SBC drafts.` : '') +
-        (inSquad.length ? ` Kept ${inSquad.length} card(s) in your active squad.` : ''),
+      name: sbc.name,
+      cards: res.squad.map((p) => ({
+        id: p.id, name: p.name, rating: p.rating, pos: p.slot ?? '', value: p.price, tags: tagsFor(p, squadIds.has(p.id)),
+      })),
+      value: res.cost,
+      squad: { rating: ev.rating, chemistry: ev.chemistry?.total ?? null, met: ev.results.filter((r) => r.ok && r.kind !== 'unsupported').length, total, check },
+      // Only cards still in the club: a submitted draft's cards are gone, not kept out.
+      leftOut: { ...window.__futAssistantWorkArea.draftsLeftOut(inDrafts, club.map((c) => c.id)), squad: keptSquad },
       apply,
     };
   }
 
-  // Returns { kind, cards, summary, apply }. Nothing is placed until apply() runs.
+  // Returns { kind, name, cards, ..., apply }. Nothing is placed until apply() runs.
   async function plan(options, onStatus) {
-    const { P } = need();
-    checkWait(P);
+    const { H, P } = need();
+    checkWait(H, P);
     // FC 27 points SBCs (Work Area: pick cards worth N points) instead of a squad.
     const workArea = window.__futAssistantWorkArea?.find();
     if (workArea) {
@@ -162,11 +201,14 @@
       const p = await window.__futAssistantWorkArea.plan(workArea, { ...options, excludeIds: exclude }, onStatus);
       const apply = async (setStatus) => {
         const res = await p.apply(setStatus);
-        res.cards.forEach((c) => placedEarlier.add(c.id));
-        return res.message;
+        (res.cards ?? []).forEach((c) => placedEarlier.add(c.id));
+        return res;
       };
-      return { kind: 'points', cards: p.cards.map((c) => ({ id: c.id, name: c.name, rating: c.rating, note: `${c.score.toLocaleString()} pts · ${cardNote(c)}` })), summary: p.summary, apply };
+      return { ...p, apply };
     }
+    let open = true;
+    try { P.findOpenChallenge(); } catch (e) { open = false; if (!/No open SBC/.test(e.message)) throw H.notice(e.message); }
+    if (!open) throw H.notice('No SBC is open', { lines: ['Open an SBC so its squad or Work Area is on screen.'], tone: 'info' });
     return planSquad(options, onStatus);
   }
 
@@ -176,5 +218,5 @@
     return p.apply(onStatus);
   }
 
-  window.__futAssistantOneClick = { plan, solveAndFill, refreshClub, placedEarlier };
+  window.__futAssistantOneClick = { plan, solveAndFill, refreshClub, screen, cooldownLeft, placedEarlier };
 })();

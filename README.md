@@ -15,34 +15,36 @@ Needs Node 20+ only for tests and the optional local page. No dependencies.
 2. Open the Web App and log in. The **FUT Assistant** panel appears at the bottom-left.
 3. After pulling new code, click the reload icon on the extension's card and reload the Web App.
 
-## Solve & pre-fill
+## Using it
 
-Open an SBC and press **Solve & pre-fill**.
+The panel shows what's open in the Web App and what the button will do: **Find cards for this
+squad** on a squad SBC, **Find cards for this SBC** on a points SBC, **Open an SBC first**, or
+**Wait 23 s** between fills. Press **–** to fold it into a small pill.
 
-1. It reads the SBC from the page (no network call) and your club (read once per session, one
-   page every 1.5–3 seconds, then reused).
-2. It picks the cards you lose least by giving up: storage duplicates, then untradeables, then
-   tradeables, using the value EA's own data gives each card.
-3. It **shows you the cards first**. Untick any you want to keep and press **Solve again without
-   unticked**; tick **Always keep the cards I untick** to keep them out for good.
-4. **Fill these** places the squad and saves the draft once. The status line then shows EA's own
-   rating, chemistry and whether EA says the requirements are met. If EA disagrees it says so.
+1. **Find cards.** It reads the SBC from the page (no network call) and your club (read once per
+   session, one page every 1.5–3 seconds, then reused), and picks the cards you lose least by
+   giving up: storage duplicates, then untradeables, then tradeables, valued with EA's own data.
+2. **Check the preview.** A squad SBC shows rating, chemistry and how many requirements are met.
+   A points SBC shows the target, this batch and what's left, then whether your club can finish
+   it at all ("can finish this: 2 submissions" or "can't finish this yet: 1,870 points short").
+   Untick any card to keep it, then **Swap out N unticked cards**; tick **Always keep the cards I
+   untick** to keep them out for good.
+3. **Place in squad** (or **Select in Work Area**). The result says whether EA agrees and what to
+   do next in EA. When a points target is out of reach the button reads **Select anyway**.
 
-What it keeps out: cards rated at or above **Keep cards rated** (default 87), your favourites,
-your active squad (starters, subs and reserves; untick **Keep my active squad** to allow them),
-special cards, loans, and cards sitting in another SBC's saved draft. It fills one squad per click
-and waits 30 seconds between fills. It won't fill a squad that fails the requirements; if buying
-a few plain cards would fix that, it says which (prices are estimates; only for SBCs without
-league, nation or club rules).
+If your club can't do an SBC, it says why, and offers the fix as a button where there is one
+(**Try with active-squad cards**, for that search only). If buying a few plain cards would fix it,
+it says which (estimated prices; only for SBCs without league, nation or club rules).
 
-**Points SBCs** (a "Work Area" where you pick cards worth points, as player SBCs are in FC 27) work
-the same way: it selects up to 30 cards exactly as tapping them would, tells you whether your club
-can reach the target and in how many submissions, and leaves **Review Selection** to you.
+What it keeps out (change under **Keeping: …**): cards rated at or above your limit (default 87),
+your favourites, your active squad (starters, subs and reserves), special cards, loans, and cards
+sitting in another SBC's saved draft (named in the preview). It fills one squad per click, waits
+30 seconds between fills, and never submits.
 
-- **Re-read my club**: use after opening packs, or if you cleared a draft the tool filled.
+- **Re-read**: use after opening packs, or if you cleared a draft the tool filled.
 - Settings, kept cards and the tool's record of its own fills live in this browser only.
 
-## Debug tools (in the panel)
+## Troubleshooting tools (in the panel)
 
 - **Export club**: saves `fut-club-YYYY-MM-DD.json`. Its `meta.sampleKeys` lists EA's raw fields.
 - **Copy SBC requirements**: copies the open SBC's rules as the tool read them, with EA's text.
@@ -93,6 +95,6 @@ See `data/sbcs.json`. Requirement kinds: `teamRating`, `chemistry`, `count` (wit
 - Card values are EA's market average, which is a guide, not a live price. Cards EA gives no value
   fall back to an estimate by rating, as do "what to buy" suggestions.
 - The solver uses cheap cards out of position when the chemistry target allows it.
-- A draft the tool filled keeps its cards out of other SBCs for a week, or until **Re-read my club**.
+- A draft the tool filled keeps its cards out of other SBCs for a week, or until **Re-read**.
 - Team rating and chemistry follow the community formulas; chemistry matched EA on a real squad.
   Icon/Hero boosts are approximated.

@@ -1,4 +1,4 @@
-// FUT Assistant – club export (READ-ONLY).
+// FUT Assistant – club reading and export (READ-ONLY). The panel is in panel.js.
 //
 // Runs inside EA's Web App page after you log in. When you press the button it reads
 // your club players and SBC storage through the Web App's own read calls, one page at
@@ -29,7 +29,7 @@
   const itemCache = new Map();
   const storageIds = new Set();
   // clubComplete: the whole club has been read this session (not just enough for a pre-fill).
-  const clubState = { clubComplete: false, storageRead: false };
+  const clubState = { clubComplete: false, storageRead: false, readAt: null };
   const remember = (items, fromStorage = false) => {
     for (const i of items) {
       if (i?.id == null) continue;
@@ -100,7 +100,7 @@
       onProgress(`Reading club… ${all.length} cards`);
       const exhausted = items.length === 0 || fresh.length === 0 ||
         res?.response?.retrievedAll === true || res?.response?.endOfList === true;
-      if (exhausted) { clubState.clubComplete = true; break; }
+      if (exhausted) { clubState.clubComplete = true; clubState.readAt = Date.now(); break; }
       if (until?.()) break;
       await pause();
     }
@@ -291,237 +291,22 @@
     store.set('protected', all);
   };
 
-  // ---- Small floating panel (shadow DOM so it can't clash with EA's styles) ----
-
-  let busy = false;
-  function mountPanel() {
-    if (document.getElementById('fut-assistant-export')) return;
-    const host = document.createElement('div');
-    host.id = 'fut-assistant-export';
-    // Sits just right of the Web App's 96px left nav so it never covers Store/Club.
-    host.style.cssText = 'position:fixed;left:108px;bottom:12px;z-index:2147483647;';
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `
-      <style>
-        .box { font: 13px/1.4 system-ui, sans-serif; background: #171a21; color: #e6e8ec; border: 1px solid #2a2f39;
-          border-radius: 10px; padding: 10px 12px; width: 250px; box-shadow: 0 4px 16px rgba(0,0,0,.35); }
-        .title { font-weight: 700; margin-bottom: 6px; }
-        button { width: 100%; padding: 7px; border: 0; border-radius: 6px; background: #4c8dff; color: #fff; font: inherit; cursor: pointer; }
-        button:disabled { opacity: .6; cursor: wait; }
-        .status { margin-top: 6px; color: #9aa3af; font-size: 12px; }
-        .x { float: right; cursor: pointer; color: #9aa3af; }
-        hr { border: 0; border-top: 1px solid #2a2f39; margin: 10px 0; }
-        textarea { width: 100%; box-sizing: border-box; height: 54px; margin-bottom: 6px; background: #0f1115; color: #e6e8ec;
-          border: 1px solid #2a2f39; border-radius: 6px; font: 11px ui-monospace, monospace; resize: vertical; }
-        .secondary { background: #2b3240; }
-        .opts { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 12px; color: #9aa3af; }
-        .opts input.tick { width: auto; margin: 0; }
-        .list { max-height: 190px; overflow: auto; margin: 6px 0; border: 1px solid #2a2f39; border-radius: 6px; padding: 4px 6px; }
-        .list label { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 1px 0; }
-        .list .meta { color: #9aa3af; margin-left: auto; white-space: nowrap; }
-        .gap { margin-top: 6px; }
-        .opts input { width: 46px; background: #0f1115; color: #e6e8ec; border: 1px solid #2a2f39; border-radius: 4px; padding: 2px 4px; }
-        .link { background: none; color: #9aa3af; text-decoration: underline; padding: 0; width: auto; margin-top: 6px; font-size: 12px; }
-        details { margin-top: 8px; } summary { cursor: pointer; color: #9aa3af; font-size: 12px; }
-      </style>
-      <div class="box">
-        <span class="x" title="Hide">✕</span>
-        <div class="title">FUT Assistant</div>
-        <label class="opts">Keep cards rated <input id="protect" type="number" min="50" max="99" value="87"> and up</label>
-        <label class="opts"><input id="keepFavs" type="checkbox" class="tick"> Keep my favourites</label>
-        <label class="opts"><input id="keepSquad" type="checkbox" class="tick"> Keep my active squad</label>
-        <label class="opts"><input id="previewOn" type="checkbox" class="tick"> Show me the cards first</label>
-        <button id="oneClick">Solve &amp; pre-fill</button>
-        <div class="status" id="oneClickStatus">Open an SBC, then click. You check and submit yourself.</div>
-        <div id="preview" hidden>
-          <div class="list" id="previewList"></div>
-          <label class="opts"><input id="rememberKeep" type="checkbox" class="tick"> Always keep the cards I untick</label>
-          <button id="applyPlan">Fill these</button>
-          <button id="resolvePlan" class="secondary gap">Solve again without unticked</button>
-          <button id="cancelPlan" class="link">Cancel</button>
-        </div>
-        <button id="refreshClub" class="link">Re-read my club</button>
-        <button id="clearKept" class="link" hidden></button>
-        <details>
-        <summary>Debug tools</summary>
-        <hr>
-        <button id="export">Export club (read-only)</button>
-        <div class="status" id="exportStatus">Reads your club and SBC storage, then saves a file.</div>
-        <hr>
-        <button id="readSbc" class="secondary">Copy SBC requirements</button>
-        <div class="status" id="readStatus">With an SBC open, copies its rules for FUT Assistant.</div>
-        <hr>
-        <textarea id="code" placeholder="Paste a pre-fill code from FUT Assistant" spellcheck="false"></textarea>
-        <button id="prefill" class="secondary">Pre-fill open SBC</button>
-        <div class="status" id="prefillStatus">Open the SBC's squad screen first. You check and submit yourself.</div>
-        </details>
-      </div>`;
-
-    // One click: read the open SBC, solve with your club, show the cards, then place them.
-    // Never submits.
-    const oneStatus = root.getElementById('oneClickStatus');
-    const $ = (id) => root.getElementById(id);
-    const cfg = settings();
-    $('protect').value = cfg.protectMinRating;
-    $('keepFavs').checked = cfg.protectFavorites;
-    $('previewOn').checked = cfg.preview;
-    $('keepSquad').checked = cfg.protectSquad;
-    $('keepSquad').addEventListener('change', () => saveSettings({ protectSquad: $('keepSquad').checked }));
-    $('protect').addEventListener('change', () => saveSettings({ protectMinRating: Number($('protect').value) || 87 }));
-    $('keepFavs').addEventListener('change', () => saveSettings({ protectFavorites: $('keepFavs').checked }));
-    $('previewOn').addEventListener('change', () => saveSettings({ preview: $('previewOn').checked }));
-
-    const showKept = () => {
-      const n = Object.keys(protectedCards()).length;
-      $('clearKept').hidden = n === 0;
-      $('clearKept').textContent = `Stop keeping ${n} card(s) I unticked`;
-    };
-    showKept();
-    $('clearKept').addEventListener('click', () => { store.set('protected', {}); showKept(); });
-
-    let plan = null;
-    let unticked = [];
-    const closePreview = () => { plan = null; $('preview').hidden = true; $('previewList').textContent = ''; };
-    const showPreview = () => {
-      const list = $('previewList');
-      list.textContent = '';
-      for (const c of plan.cards) {
-        const row = document.createElement('label');
-        const box = document.createElement('input');
-        box.type = 'checkbox'; box.checked = true; box.className = 'tick'; box.dataset.id = c.id;
-        const name = document.createElement('span');
-        name.textContent = `${c.rating} ${c.name}`;
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        meta.textContent = c.note ?? '';
-        row.append(box, name, meta);
-        list.appendChild(row);
-      }
-      $('preview').hidden = false;
-    };
-    const untickedNow = () => [...$('previewList').querySelectorAll('input:not(:checked)')].map((b) => b.dataset.id);
-
-    const guarded = async (fn) => {
-      if (busy) return;
-      if (!window.__futAssistantOneClick) { oneStatus.textContent = 'Solver scripts did not load.'; return; }
-      if (!webAppReady()) { oneStatus.textContent = 'Log in and wait for the Web App to finish loading.'; return; }
-      busy = true;
-      root.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-      try {
-        const msg = await fn((t) => { oneStatus.textContent = t; });
-        if (msg) oneStatus.textContent = msg;
-      } catch (e) {
-        closePreview();
-        oneStatus.textContent = `Stopped: ${e.message}`;
-      } finally {
-        busy = false;
-        root.querySelectorAll('button').forEach((b) => { b.disabled = false; });
-      }
-    };
-    const options = () => ({
-      protectMinRating: Number($('protect').value) || 87,
-      protectFavorites: $('keepFavs').checked,
-      protectSquad: $('keepSquad').checked,
-      protectIds: Object.keys(protectedCards()),
-      excludeIds: unticked,
-    });
-    const solveNow = (set) => window.__futAssistantOneClick.plan(options(), set).then((p) => {
-      plan = p;
-      if (!$('previewOn').checked) { const run = plan.apply; closePreview(); return run(set); }
-      showPreview();
-      return `${plan.summary} Untick any card you want to keep, then press Fill these.`;
-    });
-
-    $('oneClick').addEventListener('click', () => guarded((set) => { closePreview(); unticked = []; return solveNow(set); }));
-    $('resolvePlan').addEventListener('click', () => guarded((set) => {
-      const off = untickedNow();
-      if (!off.length) return 'Untick at least one card first.';
-      if ($('rememberKeep').checked) { protectCards(plan.cards.filter((c) => off.includes(String(c.id)))); showKept(); }
-      unticked = [...new Set([...unticked, ...off])];
-      closePreview();
-      return solveNow(set);
-    }));
-    $('applyPlan').addEventListener('click', () => guarded((set) => {
-      if (!plan) return 'Solve first.';
-      if (untickedNow().length) return 'Some cards are unticked. Press "Solve again without unticked", or tick them.';
-      const run = plan.apply;
-      closePreview();
-      return run(set);
-    }));
-    $('cancelPlan').addEventListener('click', () => { closePreview(); oneStatus.textContent = 'Cancelled. Nothing was placed.'; });
-    $('refreshClub').addEventListener('click', () => guarded((set) => { closePreview(); unticked = []; return window.__futAssistantOneClick.refreshClub(set); }));
-    const btn = root.getElementById('export');
-    const status = root.getElementById('exportStatus');
-    root.querySelector('.x').addEventListener('click', () => host.remove());
-    const setStatus = (t) => { status.textContent = t; };
-
-    const readStatus = root.getElementById('readStatus');
-    root.getElementById('readSbc').addEventListener('click', async () => {
-      try {
-        const reader = window.__futAssistantSbc;
-        if (!reader) throw new Error('SBC reader script did not load.');
-        const data = reader.readOpenSbc();
-        const text = JSON.stringify(data);
-        try { await navigator.clipboard.writeText(text); } catch { window.prompt('Copy these SBC requirements:', text); }
-        const n = data.sbc.requirements.filter((r) => r.kind !== 'unsupported').length;
-        const warn = [data.unsupported && `${data.unsupported} not understood`, data.uncertain && `${data.uncertain} to double-check`]
-          .filter(Boolean).join(', ');
-        readStatus.textContent = `Copied ${n} requirement(s) for "${data.sbc.name}"${warn ? ` (${warn})` : ''}. ` +
-          'Paste it in FUT Assistant.';
-      } catch (e) {
-        readStatus.textContent = `Stopped: ${e.message}`;
-      }
-    });
-
-    const prefillBtn = root.getElementById('prefill');
-    const prefillStatus = root.getElementById('prefillStatus');
-    prefillBtn.addEventListener('click', async () => {
-      if (busy) return;
-      const prefill = window.__futAssistantPrefill;
-      if (!prefill) { prefillStatus.textContent = 'Pre-fill script did not load.'; return; }
-      if (!webAppReady()) { prefillStatus.textContent = 'Log in and wait for the Web App to finish loading.'; return; }
-      busy = true;
-      prefillBtn.disabled = true;
-      try {
-        const msg = await prefill.run(root.getElementById('code').value, (t) => { prefillStatus.textContent = t; });
-        prefillStatus.textContent = msg;
-      } catch (e) {
-        prefillStatus.textContent = `Stopped: ${e.message}`;
-      } finally {
-        busy = false;
-        prefillBtn.disabled = false;
-      }
-    });
-
-    btn.addEventListener('click', async () => {
-      if (busy) return;
-      if (!webAppReady()) { setStatus('Log in and wait for the Web App to finish loading, then try again.'); return; }
-      busy = true;
-      btn.disabled = true;
-      try {
-        const clubItems = await readClubPlayers(setStatus);
-        await pause();
-        setStatus('Reading SBC storage…');
-        const storage = await readStorage().catch((e) => ({ items: [], note: e.message }));
-        const data = buildExport(clubItems, storage.items, storage.note ? [storage.note] : []);
-        download(data);
-        setStatus(`Saved ${data.meta.clubCards} club + ${data.meta.storageCards} storage cards.`);
-      } catch (e) {
-        setStatus(`Stopped: ${e.message}`);
-      } finally {
-        busy = false;
-        btn.disabled = false;
-      }
-    });
-    document.body.appendChild(host);
+  // A message for the panel: a short title, a few plain lines, and optionally one action the
+  // panel can offer as a button ({ label, retry: { ...options to solve again with } }).
+  function notice(title, { lines = [], action = null, tone = 'bad' } = {}) {
+    const e = new Error([title, ...lines].join(' '));
+    e.title = title;
+    e.lines = lines.filter(Boolean);
+    e.action = action;
+    e.tone = tone;
+    return e;
   }
 
   // Exposed for testing and for a manual run from the console.
   window.__futAssistantExport = {
-    buildExport, toCard, cardValue, position, settings, protectedCards, store, readClubPlayers, readStorage, mountPanel, observe, tryCall, firstDefined,
+    buildExport, toCard, cardValue, position, settings, saveSettings, protectedCards, protectCards, store, readClubPlayers,
+    readStorage, download, notice, webAppReady, observe, tryCall, firstDefined,
     pause, itemCache, storageIds, clubState, VERSION,
   };
 
-  if (document.body) mountPanel();
-  else window.addEventListener('DOMContentLoaded', mountPanel);
 })();
